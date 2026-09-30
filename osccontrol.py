@@ -39,6 +39,48 @@ SUPPORTED_TYPES = ("bool", "int", "float", "string")
 logger = logging.getLogger(__name__)
 
 
+def normalize_system_theme(theme):
+    return "dark" if isinstance(theme, str) and theme.casefold() == "dark" else "light"
+
+
+def apply_system_theme(root, theme):
+    import sv_ttk
+
+    mode = normalize_system_theme(theme)
+    sv_ttk.set_theme(mode)
+    if sys.platform == "win32":
+        try:
+            import pywinstyles
+
+            pywinstyles.apply_style(root, mode)
+        except Exception:
+            logger.debug("Could not update Windows title bar theme", exc_info=True)
+    logger.info("Applied %s system theme", mode)
+
+
+def follow_system_theme(root):
+    try:
+        import darkdetect
+    except ImportError:
+        logger.exception("darkdetect is unavailable; using the default Tk theme")
+        return
+
+    apply_system_theme(root, darkdetect.theme())
+
+    def on_theme_change(theme):
+        try:
+            root.after(0, lambda: apply_system_theme(root, theme))
+        except Exception:
+            logger.debug("Could not schedule system theme update", exc_info=True)
+
+    threading.Thread(
+        target=darkdetect.listener,
+        args=(on_theme_change,),
+        name="SystemThemeListener",
+        daemon=True,
+    ).start()
+
+
 def default_settings(app_data_directory):
     app_data_directory = Path(app_data_directory)
     return {
@@ -478,10 +520,6 @@ class OscControlApp:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _build_ui(self):
-        style = ttk.Style()
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-
         outer = ttk.Frame(self.root, padding=18)
         outer.pack(fill=BOTH, expand=True)
 
@@ -1184,6 +1222,7 @@ def main():
     logger.info("Starting VRChat OSC Control")
     root = Tk()
     set_application_icon(root)
+    follow_system_theme(root)
     OscControlApp(root, settings)
     root.mainloop()
 

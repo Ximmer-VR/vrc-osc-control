@@ -21,6 +21,8 @@ python osccontrol.py
 
 The app uses `resource/icon.ico` for its window icon.
 
+The interface follows the Windows light/dark appearance setting and updates while the app is running. The theme preference is detected automatically; no settings-file changes are needed.
+
 ## VRChat Connection
 
 The app discovers VRChat's `_oscjson._tcp.local.` OSCQuery service with Zeroconf. It uses the advertised host and TCP port for OSCQuery, and uses the advertised `OSC_IP` and `OSC_PORT` properties for outgoing OSC when available. By default, VRChat receives OSC on UDP `9000` and sends OSC updates to the app on UDP `9001`.
