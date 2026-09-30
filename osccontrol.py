@@ -298,7 +298,11 @@ def serialize_parameters(parameters, values):
 
 
 def build_registration_payload(parameters, values):
-    return {"type": "register", "parameters": serialize_parameters(parameters, values)}
+    return {
+        "type": "register",
+        "version": 1,
+        "parameters": serialize_parameters(parameters, values),
+    }
 
 
 def build_add_parameters(token, parameters, values):
