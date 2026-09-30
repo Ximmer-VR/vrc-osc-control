@@ -362,11 +362,21 @@ def parse_parameter_changed(message, registered_parameters):
     return parameter, value
 
 
+class UnsupportedProtocolVersion(RuntimeError):
+    pass
+
+
 def registration_token_from_acknowledgement(acknowledgement):
     if not isinstance(acknowledgement, dict):
         raise RuntimeError("Service registration acknowledgement was not a JSON object")
     if acknowledgement.get("type") == "error":
-        raise RuntimeError(acknowledgement.get("message", "Registration was rejected"))
+        message = acknowledgement.get("message", "Registration was rejected")
+        if acknowledgement.get("code") == "unsupported_version":
+            raise UnsupportedProtocolVersion(
+                "The API rejected this client's protocol version. This client likely needs an "
+                f"update. API response: {message}"
+            )
+        raise RuntimeError(message)
     if acknowledgement.get("type") != "registered":
         raise RuntimeError("Service did not acknowledge registration")
     token = acknowledgement.get("token")
@@ -1026,7 +1036,7 @@ class OscControlApp:
         except Exception as error:
             logger.exception("Websocket session failed")
             if not self.session_stop.is_set():
-                self.root.after(0, lambda error=error: self._session_failed(str(error)))
+                self.root.after(0, lambda error=error: self._session_failed(error))
         finally:
             self.websocket_ready.clear()
             self.session_token = None
@@ -1041,6 +1051,11 @@ class OscControlApp:
         self.status_var.set("Session registered. Incoming websocket controls will be sent to VRChat.")
 
     def _session_failed(self, error):
+        if isinstance(error, UnsupportedProtocolVersion):
+            message = str(error)
+            self.status_var.set(message)
+            messagebox.showerror("Client update required", message)
+            return
         self.status_var.set(f"Websocket session ended: {error}")
 
     def _session_closed(self):
