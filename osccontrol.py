@@ -278,7 +278,7 @@ def query_oscquery_value(base_url, path, timeout=2):
         return oscquery_value(json.loads(response.read().decode("utf-8")))
 
 
-def build_registration_payload(parameters, values):
+def serialize_parameters(parameters, values):
     missing = [
         parameter.path
         for parameter in parameters
@@ -286,18 +286,35 @@ def build_registration_payload(parameters, values):
     ]
     if missing:
         raise ValueError(f"Missing current values for: {', '.join(missing)}")
+    return [
+        {
+            "path": parameter.path,
+            "name": parameter.name,
+            "type": parameter.type,
+            "value": values[parameter.path],
+        }
+        for parameter in parameters
+    ]
+
+
+def build_registration_payload(parameters, values):
+    return {"type": "register", "parameters": serialize_parameters(parameters, values)}
+
+
+def build_add_parameters(token, parameters, values):
     return {
-        "type": "register",
-        "parameters": [
-            {
-                "path": parameter.path,
-                "name": parameter.name,
-                "type": parameter.type,
-                "value": values[parameter.path],
-            }
-            for parameter in parameters
-        ],
+        "type": "add_parameters",
+        "token": token,
+        "parameters": serialize_parameters(parameters, values),
     }
+
+
+def build_remove_parameters(token, paths):
+    return {"type": "remove_parameters", "token": token, "paths": list(paths)}
+
+
+def build_clear_parameters(token):
+    return {"type": "clear_parameters", "token": token}
 
 
 def build_parameter_update(token, path, value):
@@ -371,6 +388,7 @@ class OscControlApp:
         self.osc_send_host = OSC_SEND_HOST
         self.osc_send_port = OSC_SEND_PORT
         self.session_stop = threading.Event()
+        self.session_token = None
         self.discovery_stop = threading.Event()
         self.session_thread = None
         self.osc_server = None
@@ -614,9 +632,15 @@ class OscControlApp:
             parameters = []
         self._replace_shared_parameters(parameters)
         if self.session_thread and self.session_thread.is_alive():
-            logger.info("Stopping the previous avatar's control session")
-            self.session_stop.set()
-            self.websocket_ready.clear()
+            if self.websocket_ready.is_set():
+                logger.info("Replacing active API parameters for avatar %s", avatar_id)
+                self.parameter_update_queue.put(
+                    ("replace_parameters", avatar_id, list(parameters))
+                )
+                self.status_var.set("Synchronizing saved parameters with the active session...")
+            else:
+                logger.info("Stopping session setup because the avatar changed")
+                self.session_stop.set()
         if parameters:
             self.status_var.set(f"Loaded {len(parameters)} saved parameters for this avatar.")
         else:
@@ -645,7 +669,7 @@ class OscControlApp:
             return
         self.parameter_values[address] = value
         if self.websocket_ready.is_set():
-            self.parameter_update_queue.put((address, value))
+            self.parameter_update_queue.put(("update_parameter", address, value))
         logger.debug("Observed OSC parameter path=%r type=%s", address, parameter.type)
 
     def refresh_parameters(self):
@@ -749,14 +773,33 @@ class OscControlApp:
         self.parameters[path] = parameter
         self.registered_list.insert("", END, iid=path, values=(name, path, parameter_type))
         logger.info("Added shared parameter name=%r path=%r type=%s", name, path, parameter_type)
+        self._persist_current_shared_parameters()
+        if self.websocket_ready.is_set():
+            self.parameter_update_queue.put(("add_parameters", [parameter]))
         self.path_var.set("")
         self.custom_name_var.set("")
 
+    def _persist_current_shared_parameters(self):
+        if not self.active_avatar or self.active_avatar == "Waiting for VRChat":
+            return
+        try:
+            save_shared_parameters(
+                SHARED_PARAMETERS_FILE, self.active_avatar, list(self.parameters.values())
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            logger.exception("Could not save shared parameters for avatar %s", self.active_avatar)
+            self.status_var.set(f"Could not save shared parameters: {error}")
+
     def remove_selected(self):
-        for path in self.registered_list.selection():
+        paths = list(self.registered_list.selection())
+        for path in paths:
             self.parameters.pop(path, None)
             self.registered_list.delete(path)
             logger.info("Removed shared parameter path=%r", path)
+        if paths:
+            self._persist_current_shared_parameters()
+            if self.websocket_ready.is_set():
+                self.parameter_update_queue.put(("remove_parameters", paths))
 
     def register_session(self):
         if not self.parameters:
@@ -789,6 +832,7 @@ class OscControlApp:
             except queue.Empty:
                 break
         self.session_stop.clear()
+        self.session_token = None
         self.register_button.configure(state="disabled")
         self.share_link_var.set("")
         self.copy_button.configure(state="disabled")
@@ -841,6 +885,27 @@ class OscControlApp:
             )
         return avatar_id, values
 
+    def _read_parameter_values(self, parameters):
+        values = {}
+        for parameter in parameters:
+            try:
+                value = query_oscquery_value(self.oscquery_url, parameter.path)
+            except Exception:
+                logger.debug("Could not query current value for %s", parameter.path, exc_info=True)
+                value = self.parameter_values.get(parameter.path)
+            if value is None:
+                raise RuntimeError(f"No current OSC value is available for {parameter.name}")
+            values[parameter.path] = coerce_control_value(value, parameter.type)
+        return values
+
+    def _queue_current_parameter_updates(self, parameters, initial_values):
+        for parameter in parameters:
+            current_value = self.parameter_values.get(parameter.path)
+            if current_value is not None and current_value != initial_values[parameter.path]:
+                self.parameter_update_queue.put(
+                    ("update_parameter", parameter.path, current_value)
+                )
+
     async def _websocket_session(self, parameters, fallback_avatar_id):
         import websockets
 
@@ -857,19 +922,17 @@ class OscControlApp:
                 logger.debug("Sent registration message for %s parameters", len(payload["parameters"]))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)
                 token = registration_token_from_acknowledgement(json.loads(raw_ack))
+                self.session_token = token
                 logger.info("Control session registered successfully")
                 link = CONTROL_URL_TEMPLATE.format(token=quote(token))
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
-                for parameter in parameters:
-                    current_value = self.parameter_values.get(parameter.path)
-                    if current_value is not None and current_value != values[parameter.path]:
-                        self.parameter_update_queue.put((parameter.path, current_value))
+                self._queue_current_parameter_updates(parameters, values)
                 self.root.after(0, lambda: self._session_ready(link))
 
                 while not self.session_stop.is_set():
                     try:
-                        path, value = self.parameter_update_queue.get_nowait()
+                        event = self.parameter_update_queue.get_nowait()
                     except queue.Empty:
                         try:
                             message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
@@ -877,17 +940,92 @@ class OscControlApp:
                             continue
                         self._handle_parameter_changed(message, active_parameters, osc_client)
                     else:
-                        if path not in active_parameters:
-                            continue
-                        command = build_parameter_update(token, path, value)
-                        await websocket.send(json.dumps(command))
-                        logger.debug("Sent update_parameter for path=%r", path)
+                        event_type = event[0]
+                        if event_type == "update_parameter":
+                            _, path, value = event
+                            if path in active_parameters:
+                                await websocket.send(
+                                    json.dumps(build_parameter_update(token, path, value))
+                                )
+                                logger.debug("Sent update_parameter for path=%r", path)
+                        elif event_type == "add_parameters":
+                            add_parameters = event[1]
+                            try:
+                                add_values = await asyncio.to_thread(
+                                    self._read_parameter_values, add_parameters
+                                )
+                                await websocket.send(
+                                    json.dumps(
+                                        build_add_parameters(token, add_parameters, add_values)
+                                    )
+                                )
+                            except (OSError, RuntimeError, ValueError, TypeError) as error:
+                                logger.exception("Could not add parameters to active API session")
+                                self.root.after(
+                                    0,
+                                    lambda error=error: self.status_var.set(
+                                        f"Could not add parameter to active session: {error}"
+                                    ),
+                                )
+                                continue
+                            active_parameters.update(
+                                {parameter.path: parameter for parameter in add_parameters}
+                            )
+                            self._queue_current_parameter_updates(add_parameters, add_values)
+                            logger.info("Added %s parameters to active API session", len(add_parameters))
+                        elif event_type == "remove_parameters":
+                            paths = event[1]
+                            await websocket.send(
+                                json.dumps(build_remove_parameters(token, paths))
+                            )
+                            for path in paths:
+                                active_parameters.pop(path, None)
+                            logger.info("Removed %s parameters from active API session", len(paths))
+                        elif event_type == "replace_parameters":
+                            _, avatar_id, replacement_parameters = event
+                            await websocket.send(json.dumps(build_clear_parameters(token)))
+                            active_parameters.clear()
+                            if replacement_parameters:
+                                try:
+                                    replacement_values = await asyncio.to_thread(
+                                        self._read_parameter_values, replacement_parameters
+                                    )
+                                    await websocket.send(
+                                        json.dumps(
+                                            build_add_parameters(
+                                                token, replacement_parameters, replacement_values
+                                            )
+                                        )
+                                    )
+                                except (OSError, RuntimeError, ValueError, TypeError) as error:
+                                    logger.exception(
+                                        "Could not load saved parameters into the active API session"
+                                    )
+                                    self.root.after(
+                                        0,
+                                        lambda error=error: self.status_var.set(
+                                            f"Could not sync avatar parameters: {error}"
+                                        ),
+                                    )
+                                    continue
+                                active_parameters.update(
+                                    {parameter.path: parameter for parameter in replacement_parameters}
+                                )
+                                self._queue_current_parameter_updates(
+                                    replacement_parameters, replacement_values
+                                )
+                            logger.info(
+                                "Replaced API parameter set for avatar %s with %s parameters",
+                                avatar_id,
+                                len(replacement_parameters),
+                            )
         except Exception as error:
             logger.exception("Websocket session failed")
             if not self.session_stop.is_set():
                 self.root.after(0, lambda error=error: self._session_failed(str(error)))
         finally:
             self.websocket_ready.clear()
+            self.session_token = None
             logger.info("Websocket session closed")
             self.root.after(0, self._session_closed)
 
