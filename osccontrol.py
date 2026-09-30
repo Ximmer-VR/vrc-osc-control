@@ -24,38 +24,85 @@ from pythonosc.osc_server import ThreadingOSCUDPServer
 from pythonosc.udp_client import SimpleUDPClient
 
 
-OSCQUERY_URL_OVERRIDE = os.getenv("VRCHAT_OSCQUERY_URL")
-OSCQUERY_URL = OSCQUERY_URL_OVERRIDE or "http://127.0.0.1:9001/"
-OSC_SEND_HOST_OVERRIDE = os.getenv("VRCHAT_OSC_HOST")
-OSC_SEND_HOST = OSC_SEND_HOST_OVERRIDE or "127.0.0.1"
-OSC_SEND_PORT_OVERRIDE = os.getenv("VRCHAT_OSC_PORT")
-OSC_SEND_PORT = int(OSC_SEND_PORT_OVERRIDE or "9000")
-OSC_RECEIVE_HOST = os.getenv("VRCHAT_OSC_LISTEN_HOST", "127.0.0.1")
-OSC_RECEIVE_PORT = int(os.getenv("VRCHAT_OSC_LISTEN_PORT", "9001"))
+APP_DATA_DIRECTORY = Path(os.getenv("LOCALAPPDATA", Path.home())) / "VRChatOSCControl"
+SHARED_PARAMETERS_FILE = APP_DATA_DIRECTORY / "shared_parameters.json"
+SETTINGS_FILE = APP_DATA_DIRECTORY / "settings.json"
+DEFAULT_OSCQUERY_URL = "http://127.0.0.1:9001/"
+DEFAULT_OSC_SEND_HOST = "127.0.0.1"
+DEFAULT_OSC_SEND_PORT = 9000
 OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
-SHARED_PARAMETERS_FILE = Path(
-    os.getenv(
-        "VRCHAT_OSC_SHARED_PARAMETERS_FILE",
-        str(Path(os.getenv("LOCALAPPDATA", Path.home())) / "VRChatOSCControl" / "shared_parameters.json"),
-    )
-).expanduser()
-API_WS_URL = os.getenv("OSC_API_WS_URL", "wss://osccontrol.app/ws")
-CONTROL_URL_TEMPLATE = os.getenv("OSC_API_CONTROL_URL", "https://osccontrol.app/?token={token}")
+DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
+DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/?token={token}"
 
 OSC_TYPE_NAMES = {"i": "int", "f": "float", "s": "string", "T": "bool", "F": "bool"}
 SUPPORTED_TYPES = ("bool", "int", "float", "string")
 logger = logging.getLogger(__name__)
 
 
-def configure_logging():
-    configured_level = os.getenv("VRCHAT_OSC_LOG_LEVEL", "INFO").upper()
+def default_settings(app_data_directory):
+    app_data_directory = Path(app_data_directory)
+    return {
+        "oscquery_url": None,
+        "osc_send_host": None,
+        "osc_send_port": None,
+        "osc_receive_host": "127.0.0.1",
+        "osc_receive_port": 9001,
+        "api_websocket_url": DEFAULT_API_WS_URL,
+        "control_url_template": DEFAULT_CONTROL_URL_TEMPLATE,
+        "log_level": "INFO",
+        "log_file": str(app_data_directory / "app.log"),
+    }
+
+
+def load_settings(settings_file):
+    settings_file = Path(settings_file)
+    defaults = default_settings(settings_file.parent)
+    try:
+        settings = json.loads(settings_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.write_text(json.dumps(defaults, indent=4) + "\n", encoding="utf-8")
+        return defaults
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"Could not read settings from {settings_file}; using defaults: {error}")
+        return defaults
+
+    if not isinstance(settings, dict):
+        print(f"Settings in {settings_file} must be a JSON object; using defaults")
+        return defaults
+
+    merged = {**defaults, **settings}
+    for key in ("oscquery_url", "osc_send_host"):
+        if merged[key] is not None and not isinstance(merged[key], str):
+            merged[key] = defaults[key]
+    for key in ("osc_send_port", "osc_receive_port"):
+        value = merged[key]
+        if value is not None or key == "osc_receive_port":
+            if isinstance(value, bool):
+                value = defaults[key]
+            else:
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    value = defaults[key]
+            if isinstance(value, bool) or not 1 <= value <= 65535:
+                value = defaults[key]
+        merged[key] = value
+    for key in ("osc_receive_host", "api_websocket_url", "control_url_template", "log_level", "log_file"):
+        if not isinstance(merged[key], str) or not merged[key].strip():
+            merged[key] = defaults[key]
+    merged["log_level"] = merged["log_level"].upper()
+    if not isinstance(getattr(logging, merged["log_level"], None), int):
+        merged["log_level"] = defaults["log_level"]
+    if "{token}" not in merged["control_url_template"]:
+        merged["control_url_template"] = defaults["control_url_template"]
+    return merged
+
+
+def configure_logging(settings):
+    configured_level = settings["log_level"]
     level = getattr(logging, configured_level, logging.INFO)
-    log_path = Path(
-        os.getenv(
-            "VRCHAT_OSC_LOG_FILE",
-            str(Path(os.getenv("LOCALAPPDATA", Path.home())) / "VRChatOSCControl" / "app.log"),
-        )
-    ).expanduser()
+    log_path = Path(settings["log_file"]).expanduser()
     handlers = [logging.StreamHandler()]
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,16 +234,19 @@ def build_oscquery_connection(server, query_port, properties=None, addresses=())
     if not 1 <= query_port <= 65535:
         raise ValueError("OSCQuery service advertised an invalid TCP port")
     url_host = f"[{query_host}]" if ":" in query_host else query_host
-    osc_host = decoded_properties.get("OSC_IP") or OSC_SEND_HOST
+    osc_host = decoded_properties.get("OSC_IP") or DEFAULT_OSC_SEND_HOST
     if osc_host in ("0.0.0.0", "::"):
-        osc_host = ipv4_host or OSC_SEND_HOST
+        osc_host = ipv4_host or DEFAULT_OSC_SEND_HOST
     try:
-        osc_port = int(decoded_properties.get("OSC_PORT", OSC_SEND_PORT))
+        osc_port = int(decoded_properties.get("OSC_PORT", DEFAULT_OSC_SEND_PORT))
         if not 1 <= osc_port <= 65535:
             raise ValueError
     except ValueError:
-        logger.warning("Invalid OSC_PORT in OSCQuery service advertisement; using %s", OSC_SEND_PORT)
-        osc_port = OSC_SEND_PORT
+        logger.warning(
+            "Invalid OSC_PORT in OSCQuery service advertisement; using %s",
+            DEFAULT_OSC_SEND_PORT,
+        )
+        osc_port = DEFAULT_OSC_SEND_PORT
     return OscQueryConnection(
         url=f"http://{url_host}:{query_port}/",
         osc_host=osc_host,
@@ -386,8 +436,9 @@ def registration_token_from_acknowledgement(acknowledgement):
 
 
 class OscControlApp:
-    def __init__(self, root):
+    def __init__(self, root, settings):
         self.root = root
+        self.settings = settings
         self.root.title("VRChat OSC Control")
         self.root.geometry("780x650")
         self.root.minsize(660, 850)
@@ -398,9 +449,11 @@ class OscControlApp:
         self.websocket_ready = threading.Event()
         self.available_parameters = []
         self.active_avatar = "Waiting for VRChat"
-        self.oscquery_url = OSCQUERY_URL
-        self.osc_send_host = OSC_SEND_HOST
-        self.osc_send_port = OSC_SEND_PORT
+        self.oscquery_url = settings["oscquery_url"] or DEFAULT_OSCQUERY_URL
+        self.osc_send_host = settings["osc_send_host"] or DEFAULT_OSC_SEND_HOST
+        self.osc_send_port = settings["osc_send_port"] or DEFAULT_OSC_SEND_PORT
+        self.osc_receive_host = settings["osc_receive_host"]
+        self.osc_receive_port = settings["osc_receive_port"]
         self.session_stop = threading.Event()
         self.session_token = None
         self.discovery_stop = threading.Event()
@@ -538,13 +591,17 @@ class OscControlApp:
         ttk.Label(outer, textvariable=self.status_var, anchor="w").pack(fill=X, pady=(9, 0))
 
     def _start_osc_listener(self):
-        logger.info("Starting VRChat OSC listener on %s:%s", OSC_RECEIVE_HOST, OSC_RECEIVE_PORT)
+        logger.info(
+            "Starting VRChat OSC listener on %s:%s",
+            self.osc_receive_host,
+            self.osc_receive_port,
+        )
         dispatcher = Dispatcher()
         dispatcher.map("/avatar/change", self._on_avatar_change)
         dispatcher.set_default_handler(self._on_osc_parameter)
         try:
             self.osc_server = ThreadingOSCUDPServer(
-                (OSC_RECEIVE_HOST, OSC_RECEIVE_PORT), dispatcher
+                (self.osc_receive_host, self.osc_receive_port), dispatcher
             )
         except OSError as error:
             logger.exception("Could not start VRChat OSC listener")
@@ -608,11 +665,11 @@ class OscControlApp:
             )
 
     def _apply_discovered_connection(self, connection):
-        if not OSCQUERY_URL_OVERRIDE:
+        if not self.settings["oscquery_url"]:
             self.oscquery_url = connection.url
-        if not OSC_SEND_HOST_OVERRIDE:
+        if not self.settings["osc_send_host"]:
             self.osc_send_host = connection.osc_host
-        if not OSC_SEND_PORT_OVERRIDE:
+        if not self.settings["osc_send_port"]:
             self.osc_send_port = connection.osc_port
         logger.info(
             "Using OSCQuery URL %s and OSC destination %s:%s",
@@ -931,14 +988,16 @@ class OscControlApp:
             payload = build_registration_payload(parameters, values)
             logger.info("Registering %s parameters for avatar %s", len(parameters), avatar_id)
             logger.info("Connecting to control websocket")
-            async with websockets.connect(API_WS_URL, open_timeout=10) as websocket:
+            async with websockets.connect(
+                self.settings["api_websocket_url"], open_timeout=10
+            ) as websocket:
                 await websocket.send(json.dumps(payload))
                 logger.debug("Sent registration message for %s parameters", len(payload["parameters"]))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)
                 token = registration_token_from_acknowledgement(json.loads(raw_ack))
                 self.session_token = token
                 logger.info("Control session registered successfully")
-                link = CONTROL_URL_TEMPLATE.format(token=quote(token))
+                link = self.settings["control_url_template"].format(token=quote(token))
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
                 self._queue_current_parameter_updates(parameters, values)
@@ -1120,11 +1179,12 @@ class OscControlApp:
 
 
 def main():
-    configure_logging()
+    settings = load_settings(SETTINGS_FILE)
+    configure_logging(settings)
     logger.info("Starting VRChat OSC Control")
     root = Tk()
     set_application_icon(root)
-    OscControlApp(root)
+    OscControlApp(root, settings)
     root.mainloop()
 
 
