@@ -1,1 +1,1 @@
-pyinstaller --clean --onefile --windowed --icon=resource/icon.ico --add-data "resource/icon.ico;resource" .\osccontrol.py
+pyinstaller --clean --onefile --windowed --icon=resource/icon.ico --add-data "resource/icon.ico:resource" .\osccontrol.py
