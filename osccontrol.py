@@ -31,6 +31,7 @@ DEFAULT_OSCQUERY_URL = "http://127.0.0.1:9001/"
 DEFAULT_OSC_SEND_HOST = "127.0.0.1"
 DEFAULT_OSC_SEND_PORT = 9000
 OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
+AVATAR_CHANGE_REFRESH_DELAY_MS = 500
 DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
 DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/?token={token}"
 
@@ -768,6 +769,7 @@ class OscControlApp:
             self.status_var.set(f"Loaded {len(parameters)} saved parameters for this avatar.")
         else:
             self.status_var.set("No saved shared parameters for this avatar.")
+        self.root.after(AVATAR_CHANGE_REFRESH_DELAY_MS, self.refresh_parameters)
 
     def _replace_shared_parameters(self, parameters):
         self.parameters = {parameter.path: parameter for parameter in parameters}
