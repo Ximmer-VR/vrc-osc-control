@@ -32,6 +32,7 @@ DEFAULT_OSC_SEND_HOST = "127.0.0.1"
 DEFAULT_OSC_SEND_PORT = 9000
 OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
 AVATAR_CHANGE_REFRESH_DELAY_MS = 500
+APP_VERSION = "0.1"
 DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
 DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/?token={token}"
 
@@ -212,14 +213,22 @@ class OscQueryConnection:
     osc_port: int
 
 
-def load_shared_parameters(file_path, avatar_id):
+def _load_shared_parameter_data(file_path):
     try:
         data = json.loads(Path(file_path).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return []
+        return {}
     if not isinstance(data, dict):
         raise ValueError("Shared parameter file must contain an object keyed by avatar ID")
-    entries = data.get(avatar_id, [])
+    return data
+
+
+def load_shared_parameters(file_path, avatar_id):
+    entry = _load_shared_parameter_data(file_path).get(avatar_id, [])
+    if isinstance(entry, dict):
+        entries = entry.get("parameters", [])
+    else:
+        entries = entry
     if not isinstance(entries, list):
         raise ValueError(f"Saved parameters for avatar {avatar_id!r} must be a list")
 
@@ -252,24 +261,43 @@ def load_shared_parameters(file_path, avatar_id):
     return parameters
 
 
-def save_shared_parameters(file_path, avatar_id, parameters):
+def load_avatar_name(file_path, avatar_id):
+    entry = _load_shared_parameter_data(file_path).get(avatar_id, [])
+    if isinstance(entry, list):
+        return ""
+    if not isinstance(entry, dict):
+        raise ValueError(f"Saved data for avatar {avatar_id!r} must be an object")
+    name = entry.get("name", "")
+    return name.strip() if isinstance(name, str) else ""
+
+
+def save_shared_parameters(file_path, avatar_id, parameters, avatar_name=None):
     if not isinstance(avatar_id, str) or not avatar_id or avatar_id == "Waiting for VRChat":
         raise ValueError("Cannot save shared parameters without an active avatar ID")
     file_path = Path(file_path)
-    if file_path.exists():
-        data = json.loads(file_path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("Shared parameter file must contain an object keyed by avatar ID")
-    else:
-        data = {}
-    data[avatar_id] = [
-        {"path": item.path, "name": item.name, "type": item.type}
-        for item in parameters
-    ]
+    data = _load_shared_parameter_data(file_path)
+    previous_entry = data.get(avatar_id, {})
+    previous_name = previous_entry.get("name", "") if isinstance(previous_entry, dict) else ""
+    if avatar_name is not None and not isinstance(avatar_name, str):
+        raise ValueError("Avatar name must be a string")
+    name = previous_name if avatar_name is None else avatar_name.strip()
+    data[avatar_id] = {
+        "name": name if isinstance(name, str) else "",
+        "parameters": [
+            {"path": item.path, "name": item.name, "type": item.type}
+            for item in parameters
+        ],
+    }
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = file_path.with_name(f"{file_path.name}.tmp")
     temporary_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     temporary_path.replace(file_path)
+
+
+def build_set_avatar_name(name):
+    if not isinstance(name, str):
+        raise ValueError("Avatar name must be a string")
+    return {"type": "set_avatar_name", "name": name}
 
 
 def build_oscquery_connection(server, query_port, properties=None, addresses=()):
@@ -404,10 +432,11 @@ def serialize_parameters(parameters, values):
     ]
 
 
-def build_registration_payload(parameters, values):
+def build_registration_payload(avatar_name, parameters, values):
     return {
         "type": "register",
         "version": 1,
+        "avatar_name": avatar_name,
         "parameters": serialize_parameters(parameters, values),
     }
 
@@ -496,9 +525,9 @@ class OscControlApp:
     def __init__(self, root, settings):
         self.root = root
         self.settings = settings
-        self.root.title("VRChat OSC Control")
+        self.root.title(f"VRChat OSC Control v{APP_VERSION}")
         self.root.geometry("780x650")
-        self.root.minsize(660, 850)
+        self.root.minsize(660, 900)
 
         self.parameters = {}
         self.parameter_values = {}
@@ -520,6 +549,7 @@ class OscControlApp:
         self.service_browser = None
 
         self.avatar_var = StringVar(value=self.active_avatar)
+        self.avatar_name_var = StringVar()
         self.status_var = StringVar(value="Starting VRChat OSC listener...")
         self.path_var = StringVar()
         self.custom_name_var = StringVar()
@@ -554,6 +584,16 @@ class OscControlApp:
         ttk.Label(avatar_row, textvariable=self.avatar_var).pack(side=LEFT, fill=X, expand=True)
         ttk.Button(avatar_row, text="Refresh parameters", command=self.refresh_parameters).pack(
             side=RIGHT
+        )
+
+        avatar_name_row = ttk.Frame(outer)
+        avatar_name_row.pack(fill=X, pady=(0, 12))
+        ttk.Label(avatar_name_row, text="Avatar name", width=15).pack(side=LEFT)
+        ttk.Entry(avatar_name_row, textvariable=self.avatar_name_var).pack(
+            side=LEFT, fill=X, expand=True
+        )
+        ttk.Button(avatar_name_row, text="Save name", command=self.save_avatar_name).pack(
+            side=RIGHT, padx=(8, 0)
         )
 
         body = ttk.Panedwindow(outer, orient="vertical")
@@ -750,16 +790,19 @@ class OscControlApp:
         logger.info("Active avatar changed from %s to %s", previous_avatar, avatar_id)
         try:
             parameters = load_shared_parameters(SHARED_PARAMETERS_FILE, avatar_id)
+            avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             logger.exception("Could not load shared parameters for avatar %s", avatar_id)
             self.status_var.set(f"Could not load saved parameters: {error}")
             parameters = []
+            avatar_name = ""
+        self.avatar_name_var.set(avatar_name)
         self._replace_shared_parameters(parameters)
         if self.session_thread and self.session_thread.is_alive():
             if self.websocket_ready.is_set():
                 logger.info("Replacing active API parameters for avatar %s", avatar_id)
                 self.parameter_update_queue.put(
-                    ("replace_parameters", avatar_id, list(parameters))
+                    ("replace_parameters", avatar_id, list(parameters), avatar_name or avatar_id)
                 )
                 self.status_var.set("Synchronizing saved parameters with the active session...")
             else:
@@ -909,11 +952,38 @@ class OscControlApp:
             return
         try:
             save_shared_parameters(
-                SHARED_PARAMETERS_FILE, self.active_avatar, list(self.parameters.values())
+                SHARED_PARAMETERS_FILE,
+                self.active_avatar,
+                list(self.parameters.values()),
+                self.avatar_name_var.get(),
             )
         except (OSError, ValueError, json.JSONDecodeError) as error:
             logger.exception("Could not save shared parameters for avatar %s", self.active_avatar)
             self.status_var.set(f"Could not save shared parameters: {error}")
+
+    def save_avatar_name(self):
+        if not self.active_avatar or self.active_avatar == "Waiting for VRChat":
+            self.status_var.set("Wait for VRChat to detect an avatar before saving its name.")
+            return
+        avatar_name = self.avatar_name_var.get().strip()
+        self.avatar_name_var.set(avatar_name)
+        try:
+            save_shared_parameters(
+                SHARED_PARAMETERS_FILE,
+                self.active_avatar,
+                list(self.parameters.values()),
+                avatar_name,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            logger.exception("Could not save avatar name for %s", self.active_avatar)
+            self.status_var.set(f"Could not save avatar name: {error}")
+            return
+        logger.info("Saved avatar name %r for %s", avatar_name, self.active_avatar)
+        if self.websocket_ready.is_set():
+            self.parameter_update_queue.put(
+                ("set_avatar_name", avatar_name or self.active_avatar)
+            )
+        self.status_var.set("Avatar name saved.")
 
     def remove_selected(self):
         paths = list(self.registered_list.selection())
@@ -933,7 +1003,10 @@ class OscControlApp:
             return
         try:
             save_shared_parameters(
-                SHARED_PARAMETERS_FILE, self.active_avatar, list(self.parameters.values())
+                SHARED_PARAMETERS_FILE,
+                self.active_avatar,
+                list(self.parameters.values()),
+                self.avatar_name_var.get(),
             )
             logger.info(
                 "Saved %s shared parameters for avatar %s",
@@ -1039,7 +1112,8 @@ class OscControlApp:
             avatar_id, values = await asyncio.to_thread(
                 self._read_registration_state, parameters, fallback_avatar_id
             )
-            payload = build_registration_payload(parameters, values)
+            avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
+            payload = build_registration_payload(avatar_name, parameters, values)
             logger.info("Registering %s parameters for avatar %s", len(parameters), avatar_id)
             logger.info("Connecting to control websocket")
             async with websockets.connect(
@@ -1051,6 +1125,10 @@ class OscControlApp:
                 token = registration_token_from_acknowledgement(json.loads(raw_ack))
                 self.session_token = token
                 logger.info("Control session registered successfully")
+                avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
+                payload = build_registration_payload(avatar_name, parameters, values)
+                await websocket.send(json.dumps(payload))
+                await websocket.send(json.dumps(build_set_avatar_name(avatar_name)))
                 link = self.settings["control_url_template"].format(token=quote(token))
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
@@ -1108,9 +1186,13 @@ class OscControlApp:
                             for path in paths:
                                 active_parameters.pop(path, None)
                             logger.info("Removed %s parameters from active API session", len(paths))
+                        elif event_type == "set_avatar_name":
+                            await websocket.send(json.dumps(build_set_avatar_name(event[1])))
+                            logger.info("Updated active avatar name")
                         elif event_type == "replace_parameters":
-                            _, avatar_id, replacement_parameters = event
+                            _, avatar_id, replacement_parameters, avatar_name = event
                             await websocket.send(json.dumps(build_clear_parameters(token)))
+                            await websocket.send(json.dumps(build_set_avatar_name(avatar_name)))
                             active_parameters.clear()
                             if replacement_parameters:
                                 try:
@@ -1178,6 +1260,9 @@ class OscControlApp:
     def _handle_parameter_changed(self, raw_message, registered_parameters, osc_client):
         try:
             message = json.loads(raw_message)
+            if isinstance(message, dict) and message.get("type") == "avatar_name_updated":
+                logger.debug("Received avatar name update from API")
+                return
             parameter, value = parse_parameter_changed(message, registered_parameters)
             try:
                 osc_client.send_message(parameter.path, value)
@@ -1198,7 +1283,7 @@ class OscControlApp:
                 parameter.type,
             )
         except (json.JSONDecodeError, ValueError, TypeError) as error:
-            logger.warning("Ignored invalid parameter_changed message: %s", error)
+            logger.warning("Ignored invalid parameter_changed message: %s [raw_message=%s]", error, raw_message)
             self.root.after(
                 0,
                 lambda error=error: self.status_var.set(

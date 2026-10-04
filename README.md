@@ -33,7 +33,7 @@ On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json`
 
 Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `control_url_template`, `log_level`, and `log_file`. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
 
-Shared parameter definitions are saved per avatar to `%LOCALAPPDATA%\VRChatOSCControl\shared_parameters.json` when a session is created. When the avatar ID changes, the app loads that avatar's saved parameter set. Override the location with `VRCHAT_OSC_SHARED_PARAMETERS_FILE`.
+Avatar names and shared parameter definitions are saved per avatar to `%LOCALAPPDATA%\VRChatOSCControl\shared_parameters.json`. When the avatar ID changes, the app loads that avatar's saved name and parameter set. Override the location with `VRCHAT_OSC_SHARED_PARAMETERS_FILE`.
 
 ## Websocket Protocol
 
@@ -55,6 +55,15 @@ The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_AP
 ```
 
 The API generates the session token and returns it in `{"type":"registered","token":"<token>"}`. The app uses that token in the share link and subsequent updates. The app expects remote changes in this format:
+
+After registration, and whenever the active avatar name changes, the app sends:
+
+```json
+{
+  "type": "set_avatar_name",
+  "name": "Avatar Alpha"
+}
+```
 
 ```json
 {
