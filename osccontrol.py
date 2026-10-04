@@ -183,6 +183,20 @@ def set_application_icon(root):
         logger.exception("Could not load application icon from %s", icon_path)
 
 
+def set_windows_app_user_model_id():
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "Ximmer.VRChatOSCControl"
+        )
+    except Exception:
+        logger.exception("Could not set Windows application identity")
+
+
 @dataclass(frozen=True)
 class Parameter:
     path: str
@@ -1220,6 +1234,7 @@ def main():
     settings = load_settings(SETTINGS_FILE)
     configure_logging(settings)
     logger.info("Starting VRChat OSC Control")
+    set_windows_app_user_model_id()
     root = Tk()
     set_application_icon(root)
     follow_system_theme(root)
