@@ -72,13 +72,28 @@ async def _connect_control_websocket(url):
     while True:
         try:
             return await websockets.connect(url, open_timeout=10)
-        except websockets.exceptions.InvalidStatus as error:
-            if error.response.status_code != 503 or retries_remaining == 0:
+        except (
+            websockets.exceptions.InvalidStatus,
+            websockets.exceptions.ConnectionClosedError,
+        ) as error:
+            if isinstance(error, websockets.exceptions.InvalidStatus):
+                retry_reason = error.response.status_code == 503
+                retry_cause = "HTTP 503"
+            else:
+                close = error.rcvd
+                retry_reason = (
+                    close is not None
+                    and close.code == 1013
+                    and close.reason == "instance draining"
+                )
+                retry_cause = "1013 instance draining"
+            if not retry_reason or retries_remaining == 0:
                 raise
             retries_remaining -= 1
             retry_number = API_WS_503_RETRIES - retries_remaining
             logger.warning(
-                "Control websocket handshake returned HTTP 503; retrying (%s/%s)",
+                "Control websocket connection received %s; retrying (%s/%s)",
+                retry_cause,
                 retry_number,
                 API_WS_503_RETRIES,
             )
