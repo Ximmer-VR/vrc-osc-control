@@ -45,6 +45,7 @@ from osc_core import (
     parse_parameter_changed,
     query_oscquery_value,
     registration_token_from_acknowledgement,
+    registration_url_from_acknowledgement,
     save_shared_parameters,
     serialize_parameters,
 )
@@ -894,14 +895,18 @@ class OscControlApp:
                 await websocket.send(json.dumps(payload))
                 logger.debug("Sent registration message for %s parameters", len(payload["parameters"]))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)
-                token = registration_token_from_acknowledgement(json.loads(raw_ack))
+                acknowledgement = json.loads(raw_ack)
+                logger.debug("Received acknowledgement: %s", acknowledgement)
+                token = registration_token_from_acknowledgement(acknowledgement)
+                link = registration_url_from_acknowledgement(acknowledgement)
                 self.session_token = token
                 logger.info("Control session registered successfully")
                 avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
                 payload = build_registration_payload(avatar_name, parameters, values)
                 await websocket.send(json.dumps(payload))
                 await websocket.send(json.dumps(build_set_avatar_name(avatar_name)))
-                link = self.settings["control_url_template"].format(token=quote(token))
+                if link is None:
+                    link = self.settings["control_url_template"].format(token=quote(token))
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
                 self._queue_current_parameter_updates(parameters, values)
