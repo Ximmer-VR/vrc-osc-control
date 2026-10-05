@@ -59,7 +59,6 @@ OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
 AVATAR_CHANGE_REFRESH_DELAY_MS = 500
 APP_VERSION = "0.1"
 DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
-DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/t/{token}"
 API_WS_503_RETRIES = 3
 API_WS_RETRY_DELAY_SECONDS = 1
 
@@ -152,7 +151,6 @@ def default_settings(app_data_directory):
         "osc_receive_host": "127.0.0.1",
         "osc_receive_port": 9001,
         "api_websocket_url": DEFAULT_API_WS_URL,
-        "control_url_template": DEFAULT_CONTROL_URL_TEMPLATE,
         "log_level": "INFO",
         "log_file": str(app_data_directory / "app.log"),
     }
@@ -192,14 +190,12 @@ def load_settings(settings_file):
             if isinstance(value, bool) or not 1 <= value <= 65535:
                 value = defaults[key]
         merged[key] = value
-    for key in ("osc_receive_host", "api_websocket_url", "control_url_template", "log_level", "log_file"):
+    for key in ("osc_receive_host", "api_websocket_url", "log_level", "log_file"):
         if not isinstance(merged[key], str) or not merged[key].strip():
             merged[key] = defaults[key]
     merged["log_level"] = merged["log_level"].upper()
     if not isinstance(getattr(logging, merged["log_level"], None), int):
         merged["log_level"] = defaults["log_level"]
-    if "{token}" not in merged["control_url_template"]:
-        merged["control_url_template"] = defaults["control_url_template"]
     return merged
 
 
@@ -901,8 +897,6 @@ class OscControlApp:
                 link = registration_url_from_acknowledgement(acknowledgement)
                 self.session_token = token
                 logger.info("Control session registered successfully")
-                if link is None:
-                    link = self.settings["control_url_template"].format(token=quote(token))
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
                 self._queue_current_parameter_updates(parameters, values)
