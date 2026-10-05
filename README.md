@@ -54,7 +54,19 @@ The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_AP
 }
 ```
 
-The API generates the session token and returns it in `{"type":"registered","token":"<token>"}`. The app uses that token in the share link and subsequent updates. The app expects remote changes in this format:
+The API generates the session token and returns a `registered` message containing the session URL:
+
+```json
+{
+  "type": "registered",
+  "version": 1,
+  "token": "grFMwOxz",
+  "url": "http://osccontrol.app/t/grFMwOxz",
+  "count": 16
+}
+```
+
+The app puts the API-provided URL in the control session link and uses the token for subsequent updates. If the response omits `url`, the app falls back to the configured `control_url_template`. The app expects remote changes in this format:
 
 If the websocket connection attempt receives HTTP 503 or closes with code 1013 and reason `instance draining`, the app retries the connection up to three times to allow the load balancer to route it to another API shard.
 

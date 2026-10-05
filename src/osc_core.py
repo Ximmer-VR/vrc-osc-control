@@ -334,3 +334,14 @@ def registration_token_from_acknowledgement(acknowledgement):
     if not isinstance(token, str) or not token.strip():
         raise RuntimeError("Service registration response did not include a valid token")
     return token
+
+
+def registration_url_from_acknowledgement(acknowledgement):
+    if not isinstance(acknowledgement, dict) or acknowledgement.get("type") != "registered":
+        raise RuntimeError("Service did not acknowledge registration")
+    url = acknowledgement.get("url")
+    if url is None:
+        return None
+    if not isinstance(url, str) or not url.strip():
+        raise RuntimeError("Service registration response included an invalid URL")
+    return url
