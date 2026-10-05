@@ -776,8 +776,9 @@ class OscControlApp:
                     )
                 except Exception:
                     logger.debug("Could not query current value for %s", parameter.path, exc_info=True)
-            if parameter.path not in values:
-                raise RuntimeError(f"No current OSC value is available for {parameter.name}")
+            if values.get(parameter.path) is None:
+                values.pop(parameter.path, None)
+                continue
             values[parameter.path] = coerce_control_value(
                 values[parameter.path], parameter.type
             )
@@ -792,9 +793,37 @@ class OscControlApp:
                 logger.debug("Could not query current value for %s", parameter.path, exc_info=True)
                 value = self.parameter_values.get(parameter.path)
             if value is None:
-                raise RuntimeError(f"No current OSC value is available for {parameter.name}")
+                continue
             values[parameter.path] = coerce_control_value(value, parameter.type)
         return values
+
+    def _report_ignored_parameters(self, parameters, avatar_id=None):
+        if not parameters:
+            return
+        parameter_details = ", ".join(
+            f"{parameter.name} ({parameter.path})" for parameter in parameters
+        )
+        logger.warning(
+            "Ignoring %s unavailable avatar parameter(s)%s: %s",
+            len(parameters),
+            f" for avatar {avatar_id}" if avatar_id else "",
+            parameter_details,
+        )
+
+        def update_ui():
+            if avatar_id and self.active_avatar != avatar_id:
+                return
+            removed = False
+            for parameter in parameters:
+                if self.parameters.get(parameter.path) == parameter:
+                    self.parameters.pop(parameter.path, None)
+                    self.registered_list.delete(parameter.path)
+                    removed = True
+            if removed:
+                self._persist_current_shared_parameters()
+            self.status_var.set(f"Ignored unavailable avatar parameters: {parameter_details}")
+
+        self.root.after(0, update_ui)
 
     def _queue_current_parameter_updates(self, parameters, initial_values):
         for parameter in parameters:
@@ -812,6 +841,13 @@ class OscControlApp:
             avatar_id, values = await asyncio.to_thread(
                 self._read_registration_state, parameters, fallback_avatar_id
             )
+            ignored_parameters = [
+                parameter for parameter in parameters if parameter.path not in values
+            ]
+            self._report_ignored_parameters(ignored_parameters, avatar_id)
+            parameters = [
+                parameter for parameter in parameters if parameter.path in values
+            ]
             avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
             payload = build_registration_payload(avatar_name, parameters, values)
             logger.info("Registering %s parameters for avatar %s", len(parameters), avatar_id)
@@ -833,7 +869,9 @@ class OscControlApp:
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
                 self._queue_current_parameter_updates(parameters, values)
-                self.root.after(0, lambda: self._session_ready(link))
+                self.root.after(
+                    0, lambda: self._session_ready(link, ignored_parameters)
+                )
 
                 while not self.session_stop.is_set():
                     try:
@@ -859,6 +897,19 @@ class OscControlApp:
                                 add_values = await asyncio.to_thread(
                                     self._read_parameter_values, add_parameters
                                 )
+                                ignored_parameters = [
+                                    parameter
+                                    for parameter in add_parameters
+                                    if parameter.path not in add_values
+                                ]
+                                self._report_ignored_parameters(ignored_parameters)
+                                add_parameters = [
+                                    parameter
+                                    for parameter in add_parameters
+                                    if parameter.path in add_values
+                                ]
+                                if not add_parameters:
+                                    continue
                                 await websocket.send(
                                     json.dumps(
                                         build_add_parameters(token, add_parameters, add_values)
@@ -899,13 +950,29 @@ class OscControlApp:
                                     replacement_values = await asyncio.to_thread(
                                         self._read_parameter_values, replacement_parameters
                                     )
-                                    await websocket.send(
-                                        json.dumps(
-                                            build_add_parameters(
-                                                token, replacement_parameters, replacement_values
+                                    ignored_parameters = [
+                                        parameter
+                                        for parameter in replacement_parameters
+                                        if parameter.path not in replacement_values
+                                    ]
+                                    self._report_ignored_parameters(
+                                        ignored_parameters, avatar_id
+                                    )
+                                    replacement_parameters = [
+                                        parameter
+                                        for parameter in replacement_parameters
+                                        if parameter.path in replacement_values
+                                    ]
+                                    if replacement_parameters:
+                                        await websocket.send(
+                                            json.dumps(
+                                                build_add_parameters(
+                                                    token,
+                                                    replacement_parameters,
+                                                    replacement_values,
+                                                )
                                             )
                                         )
-                                    )
                                 except (OSError, RuntimeError, ValueError, TypeError) as error:
                                     logger.exception(
                                         "Could not load saved parameters into the active API session"
@@ -938,12 +1005,21 @@ class OscControlApp:
             logger.info("Websocket session closed")
             self.root.after(0, self._session_closed)
 
-    def _session_ready(self, link):
+    def _session_ready(self, link, ignored_parameters=()):
         self.share_link_var.set(link)
         self.copy_button.configure(state="normal")
         self.open_button.configure(state="normal")
         self.register_button.configure(state="normal", text="Session active")
-        self.status_var.set("Session registered. Incoming websocket controls will be sent to VRChat.")
+        if ignored_parameters:
+            paths = ", ".join(parameter.path for parameter in ignored_parameters)
+            self.status_var.set(
+                "Session registered; ignored unavailable avatar parameter paths: "
+                f"{paths}"
+            )
+        else:
+            self.status_var.set(
+                "Session registered. Incoming websocket controls will be sent to VRChat."
+            )
 
     def _session_failed(self, error):
         if isinstance(error, UnsupportedProtocolVersion):
