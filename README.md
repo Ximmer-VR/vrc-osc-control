@@ -56,6 +56,8 @@ The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_AP
 
 The API generates the session token and returns it in `{"type":"registered","token":"<token>"}`. The app uses that token in the share link and subsequent updates. The app expects remote changes in this format:
 
+If the websocket handshake receives HTTP 503, the app retries the connection up to three times to allow the load balancer to route it to another API shard.
+
 After registration, and whenever the active avatar name changes, the app sends:
 
 ```json
