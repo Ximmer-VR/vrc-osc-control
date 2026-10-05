@@ -870,26 +870,20 @@ class OscControlApp:
     async def _websocket_session(self, parameters, fallback_avatar_id):
         osc_client = SimpleUDPClient(self.osc_send_host, self.osc_send_port)
         try:
-            avatar_id, values = await asyncio.to_thread(
-                self._read_registration_state, parameters, fallback_avatar_id
-            )
-            ignored_parameters = [
-                parameter for parameter in parameters if parameter.path not in values
-            ]
+            avatar_id, values = await asyncio.to_thread(self._read_registration_state, parameters, fallback_avatar_id)
+            ignored_parameters = [parameter for parameter in parameters if parameter.path not in values]
             self._report_ignored_parameters(ignored_parameters, avatar_id)
-            parameters = [
-                parameter for parameter in parameters if parameter.path in values
-            ]
+            parameters = [parameter for parameter in parameters if parameter.path in values]
             avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
-            payload = build_registration_payload(avatar_name, parameters, values)
             logger.info("Registering %s parameters for avatar %s", len(parameters), avatar_id)
             logger.info("Connecting to control websocket")
             websocket_connection = await _connect_control_websocket(
                 self.settings["api_websocket_url"]
             )
             async with websocket_connection as websocket:
+                payload = build_registration_payload(avatar_name, parameters, values)
+                logger.debug("Sending registration message for %s parameters", len(payload["parameters"]))
                 await websocket.send(json.dumps(payload))
-                logger.debug("Sent registration message for %s parameters", len(payload["parameters"]))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)
                 acknowledgement = json.loads(raw_ack)
                 logger.debug("Received acknowledgement: %s", acknowledgement)
@@ -912,7 +906,7 @@ class OscControlApp:
                             message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                         except asyncio.TimeoutError:
                             continue
-                        self._handle_parameter_changed(message, active_parameters, osc_client)
+                        self._handle_websocket_command(message, active_parameters, osc_client)
                     else:
                         event_type = event[0]
                         if event_type == "update_parameter":
@@ -1064,39 +1058,51 @@ class OscControlApp:
         if not self.session_stop.is_set():
             self.register_button.configure(state="normal", text="Connect and create share link")
 
-    def _handle_parameter_changed(self, raw_message, registered_parameters, osc_client):
+    def _handle_websocket_command(self, raw_message, registered_parameters, osc_client):
         try:
             message = json.loads(raw_message)
-            if isinstance(message, dict) and message.get("type") == "avatar_name_updated":
-                logger.debug("Received avatar name update from API")
+
+            if not isinstance(message, dict):
+                logger.debug("Received non-dict message from API")
                 return
-            parameter, value = parse_parameter_changed(message, registered_parameters)
-            try:
-                osc_client.send_message(parameter.path, value)
-            except Exception:
-                logger.exception("Failed to send OSC control for parameter %r", parameter.name)
-                self.root.after(
-                    0,
-                    lambda name=parameter.name: self.status_var.set(
-                        f"Failed to send OSC update for {name}. See the log for details."
-                    ),
-                )
-                return
-            self.parameter_values[parameter.path] = value
-            logger.debug(
-                "Applied remote parameter change name=%r path=%r type=%s",
-                parameter.name,
-                parameter.path,
-                parameter.type,
-            )
+
+            command_type = message.get("type")
+
+            match command_type:
+                case "avatar_name_updated":
+                    logger.debug("Received avatar name update from API. name=%r" % message.get("name"))
+                    return
+
+                case "parameters_cleared":
+                    logger.debug("Received parameters cleared update from API. count:%d" % message.get("count"))
+                    return
+
+                case "parameters_added":
+                    logger.debug("Received parameters added update from API. count:%d" % message.get("count"))
+                    return
+
+                case "parameters_removed":
+                    logger.debug("Received parameters removed update from API. count:%d" % message.get("count"))
+                    return
+
+                case "parameter_changed":
+                    parameter, value = parse_parameter_changed(message, registered_parameters)
+                    try:
+                        osc_client.send_message(parameter.path, value)
+                    except Exception:
+                        logger.exception("Failed to send OSC control for parameter %r", parameter.name)
+                        self.root.after(0, lambda name=parameter.name: self.status_var.set(f"Failed to send OSC update for {name}. See the log for details."))
+                        return
+                    self.parameter_values[parameter.path] = value
+                    logger.debug("Applied remote parameter change name=%r path=%r type=%s", parameter.name, parameter.path, parameter.type)
+
+                case _:
+                    logger.debug("Received unknown command type from API: %r message: %r", command_type, raw_message)
+                    return
+
         except (json.JSONDecodeError, ValueError, TypeError) as error:
             logger.warning("Ignored invalid parameter_changed message: %s [raw_message=%s]", error, raw_message)
-            self.root.after(
-                0,
-                lambda error=error: self.status_var.set(
-                    f"Ignored invalid parameter update: {error}"
-                ),
-            )
+            self.root.after(0, lambda error=error: self.status_var.set(f"Ignored invalid parameter update: {error}"))
 
     def copy_link(self):
         link = self.share_link_var.get()
