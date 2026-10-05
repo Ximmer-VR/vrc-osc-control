@@ -58,7 +58,7 @@ OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
 AVATAR_CHANGE_REFRESH_DELAY_MS = 500
 APP_VERSION = "0.1"
 DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
-DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/?token={token}"
+DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/t/{token}"
 
 logger = logging.getLogger(__name__)
 
