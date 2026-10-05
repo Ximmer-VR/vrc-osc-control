@@ -59,8 +59,30 @@ AVATAR_CHANGE_REFRESH_DELAY_MS = 500
 APP_VERSION = "0.1"
 DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
 DEFAULT_CONTROL_URL_TEMPLATE = "https://osccontrol.app/t/{token}"
+API_WS_503_RETRIES = 3
+API_WS_RETRY_DELAY_SECONDS = 1
 
 logger = logging.getLogger(__name__)
+
+
+async def _connect_control_websocket(url):
+    import websockets
+
+    retries_remaining = API_WS_503_RETRIES
+    while True:
+        try:
+            return await websockets.connect(url, open_timeout=10)
+        except websockets.exceptions.InvalidStatus as error:
+            if error.response.status_code != 503 or retries_remaining == 0:
+                raise
+            retries_remaining -= 1
+            retry_number = API_WS_503_RETRIES - retries_remaining
+            logger.warning(
+                "Control websocket handshake returned HTTP 503; retrying (%s/%s)",
+                retry_number,
+                API_WS_503_RETRIES,
+            )
+            await asyncio.sleep(API_WS_RETRY_DELAY_SECONDS)
 
 
 def normalize_system_theme(theme):
@@ -834,8 +856,6 @@ class OscControlApp:
                 )
 
     async def _websocket_session(self, parameters, fallback_avatar_id):
-        import websockets
-
         osc_client = SimpleUDPClient(self.osc_send_host, self.osc_send_port)
         try:
             avatar_id, values = await asyncio.to_thread(
@@ -852,9 +872,10 @@ class OscControlApp:
             payload = build_registration_payload(avatar_name, parameters, values)
             logger.info("Registering %s parameters for avatar %s", len(parameters), avatar_id)
             logger.info("Connecting to control websocket")
-            async with websockets.connect(
-                self.settings["api_websocket_url"], open_timeout=10
-            ) as websocket:
+            websocket_connection = await _connect_control_websocket(
+                self.settings["api_websocket_url"]
+            )
+            async with websocket_connection as websocket:
                 await websocket.send(json.dumps(payload))
                 logger.debug("Sent registration message for %s parameters", len(payload["parameters"]))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)
