@@ -901,10 +901,6 @@ class OscControlApp:
                 link = registration_url_from_acknowledgement(acknowledgement)
                 self.session_token = token
                 logger.info("Control session registered successfully")
-                avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
-                payload = build_registration_payload(avatar_name, parameters, values)
-                await websocket.send(json.dumps(payload))
-                await websocket.send(json.dumps(build_set_avatar_name(avatar_name)))
                 if link is None:
                     link = self.settings["control_url_template"].format(token=quote(token))
                 active_parameters = {parameter.path: parameter for parameter in parameters}
