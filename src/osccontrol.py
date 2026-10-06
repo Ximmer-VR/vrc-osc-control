@@ -1132,7 +1132,11 @@ class OscControlApp:
         self.share_link_var.set(link)
         self.copy_button.configure(state="normal")
         self.open_button.configure(state="normal")
-        self.register_button.configure(state="normal", text="Session active")
+        self.register_button.configure(
+            state="normal",
+            text="End Session",
+            command=self.end_session,
+        )
         if ignored_parameters:
             paths = ", ".join(parameter.path for parameter in ignored_parameters)
             self.status_var.set(
@@ -1152,9 +1156,30 @@ class OscControlApp:
             return
         self.status_var.set(f"Websocket session ended: {error}")
 
+    def end_session(self):
+        if self.session_stop.is_set():
+            return
+        logger.info("Ending active websocket session")
+        self.session_stop.set()
+        self.websocket_ready.clear()
+        self.register_button.configure(state="disabled", text="Ending session...")
+        self.copy_button.configure(state="disabled")
+        self.open_button.configure(state="disabled")
+        self.status_var.set("Ending control session...")
+
     def _session_closed(self):
-        if not self.session_stop.is_set():
-            self.register_button.configure(state="normal", text="Connect and create share link")
+        ended_by_user = self.session_stop.is_set()
+        self.session_stop.clear()
+        self.register_button.configure(
+            state="normal",
+            text="Connect and create share link",
+            command=self.register_session,
+        )
+        if ended_by_user:
+            self.share_link_var.set("")
+            self.copy_button.configure(state="disabled")
+            self.open_button.configure(state="disabled")
+            self.status_var.set("Control session ended.")
 
     def _handle_websocket_command(self, raw_message, registered_parameters, osc_client):
         try:
