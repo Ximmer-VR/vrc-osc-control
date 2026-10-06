@@ -909,117 +909,64 @@ class OscControlApp:
                         self._handle_websocket_command(message, active_parameters, osc_client)
                     else:
                         event_type = event[0]
-                        if event_type == "update_parameter":
-                            _, path, value = event
-                            if path in active_parameters:
-                                await websocket.send(
-                                    json.dumps(build_parameter_update(token, path, value))
-                                )
-                                logger.debug("Sent update_parameter for path=%r", path)
-                        elif event_type == "add_parameters":
-                            add_parameters = event[1]
-                            try:
-                                add_values = await asyncio.to_thread(
-                                    self._read_parameter_values, add_parameters
-                                )
-                                ignored_parameters = [
-                                    parameter
-                                    for parameter in add_parameters
-                                    if parameter.path not in add_values
-                                ]
-                                self._report_ignored_parameters(ignored_parameters)
-                                add_parameters = [
-                                    parameter
-                                    for parameter in add_parameters
-                                    if parameter.path in add_values
-                                ]
-                                if not add_parameters:
-                                    continue
-                                await websocket.send(
-                                    json.dumps(
-                                        build_add_parameters(token, add_parameters, add_values)
-                                    )
-                                )
-                            except (OSError, RuntimeError, ValueError, TypeError) as error:
-                                logger.exception("Could not add parameters to active API session")
-                                self.root.after(
-                                    0,
-                                    lambda error=error: self.status_var.set(
-                                        f"Could not add parameter to active session: {error}"
-                                    ),
-                                )
-                                continue
-                            active_parameters.update(
-                                {parameter.path: parameter for parameter in add_parameters}
-                            )
-                            self._queue_current_parameter_updates(add_parameters, add_values)
-                            logger.info("Added %s parameters to active API session", len(add_parameters))
-                        elif event_type == "remove_parameters":
-                            paths = event[1]
-                            await websocket.send(
-                                json.dumps(build_remove_parameters(token, paths))
-                            )
-                            for path in paths:
-                                active_parameters.pop(path, None)
-                            logger.info("Removed %s parameters from active API session", len(paths))
-                        elif event_type == "set_avatar_name":
-                            await websocket.send(json.dumps(build_set_avatar_name(event[1])))
-                            logger.info("Updated active avatar name")
-                        elif event_type == "replace_parameters":
-                            _, avatar_id, replacement_parameters, avatar_name = event
-                            await websocket.send(json.dumps(build_clear_parameters(token)))
-                            await websocket.send(json.dumps(build_set_avatar_name(avatar_name)))
-                            active_parameters.clear()
-                            if replacement_parameters:
+
+                        match event_type:
+
+                            case "update_parameter":
+                                _, path, value = event
+                                if path in active_parameters:
+                                    logger.debug("Sending update_parameter for path=%r", path)
+                                    await websocket.send(json.dumps(build_parameter_update(token, path, value)))
+
+                            case "add_parameters":
+                                add_parameters = event[1]
                                 try:
-                                    replacement_values = await asyncio.to_thread(
-                                        self._read_parameter_values, replacement_parameters
-                                    )
-                                    ignored_parameters = [
-                                        parameter
-                                        for parameter in replacement_parameters
-                                        if parameter.path not in replacement_values
-                                    ]
-                                    self._report_ignored_parameters(
-                                        ignored_parameters, avatar_id
-                                    )
-                                    replacement_parameters = [
-                                        parameter
-                                        for parameter in replacement_parameters
-                                        if parameter.path in replacement_values
-                                    ]
-                                    if replacement_parameters:
-                                        await websocket.send(
-                                            json.dumps(
-                                                build_add_parameters(
-                                                    token,
-                                                    replacement_parameters,
-                                                    replacement_values,
-                                                )
-                                            )
-                                        )
+                                    add_values = await asyncio.to_thread(self._read_parameter_values, add_parameters)
+                                    ignored_parameters = [parameter for parameter in add_parameters if parameter.path not in add_values]
+                                    self._report_ignored_parameters(ignored_parameters)
+                                    add_parameters = [parameter for parameter in add_parameters if parameter.path in add_values]
+                                    if not add_parameters:
+                                        continue
+                                    await websocket.send(json.dumps(build_add_parameters(token, add_parameters, add_values)))
                                 except (OSError, RuntimeError, ValueError, TypeError) as error:
-                                    logger.exception(
-                                        "Could not load saved parameters into the active API session"
-                                    )
-                                    self.root.after(
-                                        0,
-                                        lambda error=error: self.status_var.set(
-                                            f"Could not sync avatar parameters: {error}"
-                                        ),
-                                    )
+                                    logger.exception("Could not add parameters to active API session")
+                                    self.root.after(0, lambda error=error: self.status_var.set(f"Could not add parameter to active session: {error}"))
                                     continue
-                                active_parameters.update(
-                                    {parameter.path: parameter for parameter in replacement_parameters}
-                                )
-                                self._queue_current_parameter_updates(
-                                    replacement_parameters, replacement_values
-                                )
-                            logger.info(
-                                "Replaced API parameter set for avatar %s with %s parameters",
-                                avatar_id,
-                                len(replacement_parameters),
-                            )
+                                active_parameters.update({parameter.path: parameter for parameter in add_parameters})
+                                self._queue_current_parameter_updates(add_parameters, add_values)
+                                logger.info("Added %s parameters to active API session", len(add_parameters))
+
+                            case "remove_parameters":
+                                paths = event[1]
+                                await websocket.send(json.dumps(build_remove_parameters(token, paths)))
+                                for path in paths:
+                                    active_parameters.pop(path, None)
+                                logger.info("Removed %s parameters from active API session", len(paths))
+
+                            case "set_avatar_name":
+                                await websocket.send(json.dumps(build_set_avatar_name(event[1])))
+                                logger.info("Updated active avatar name")
+
+                            case "replace_parameters":
+                                _, avatar_id, replacement_parameters, avatar_name = event
+                                await websocket.send(json.dumps(build_clear_parameters(token)))
+                                await websocket.send(json.dumps(build_set_avatar_name(avatar_name)))
+                                active_parameters.clear()
+                                if replacement_parameters:
+                                    try:
+                                        replacement_values = await asyncio.to_thread(self._read_parameter_values, replacement_parameters)
+                                        ignored_parameters = [parameter for parameter in replacement_parameters if parameter.path not in replacement_values]
+                                        self._report_ignored_parameters(ignored_parameters, avatar_id)
+                                        replacement_parameters = [parameter for parameter in replacement_parameters if parameter.path in replacement_values]
+                                        if replacement_parameters:
+                                            await websocket.send(json.dumps(build_add_parameters(token, replacement_parameters, replacement_values)))
+                                    except (OSError, RuntimeError, ValueError, TypeError) as error:
+                                        logger.exception("Could not load saved parameters into the active API session")
+                                        self.root.after(0, lambda error=error: self.status_var.set(f"Could not sync avatar parameters: {error}"))
+                                        continue
+                                    active_parameters.update({parameter.path: parameter for parameter in replacement_parameters})
+                                    self._queue_current_parameter_updates(replacement_parameters, replacement_values)
+                                logger.info("Replaced API parameter set for avatar %s with %s parameters", avatar_id, len(replacement_parameters))
         except Exception as error:
             logger.exception("Websocket session failed")
             if not self.session_stop.is_set():
