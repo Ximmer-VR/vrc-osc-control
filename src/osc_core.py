@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Ximmer's Creations <ximmer@ximmer.dev>.
+# Licensed under the source-available proprietary terms in LICENSE.
+# Personal noncommercial use and private modifications only; see LICENSE.
+
 import ipaddress
 import json
 import logging
