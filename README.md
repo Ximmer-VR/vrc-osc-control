@@ -25,11 +25,11 @@ The interface follows the Windows light/dark appearance setting and updates whil
 
 ## VRChat Connection
 
-The app discovers VRChat's `_oscjson._tcp.local.` OSCQuery service with Zeroconf. It uses the advertised host and TCP port for OSCQuery, and uses the advertised `OSC_IP` and `OSC_PORT` properties for outgoing OSC when available. By default, VRChat receives OSC on UDP `9000` and sends OSC updates to the app on UDP `9001`.
+The app discovers VRChat's `_oscjson._tcp.local.` OSCQuery service with Zeroconf. It uses the advertised host and TCP port for OSCQuery, and uses the advertised `OSC_IP` and `OSC_PORT` properties for outgoing OSC when available. By default, VRChat receives OSC on UDP `9000`. The app listens for VRChat OSC on an OS-assigned UDP port and advertises that port through `_osc._udp.local.` and its OSCQuery `HOST_INFO`, so it doesn't contend for the common `9001` receive port.
 
 Avatar parameter definitions and initial values are read from OSCQuery. The app also listens for `/avatar/change` and OSC updates for selected shared parameters. It queries OSCQuery for the current avatar ID and falls back to the most recent `/avatar/change` event when necessary. Parameters can be added manually if discovery is unavailable.
 
-On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json` with defaults. Edit that file to configure connection and logging settings. OSCQuery and outgoing OSC overrides default to `null`, which lets Zeroconf discovery supply connection information; the incoming listener defaults to `127.0.0.1:9001`.
+On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json` with defaults. Edit that file to configure connection and logging settings. OSCQuery and outgoing OSC overrides default to `null`, which lets Zeroconf discovery supply connection information. The receive listener defaults to `127.0.0.1` and `osc_receive_port: 0`; port `0` asks the OS for an available UDP port, which the app advertises to VRChat. Set a nonzero `osc_receive_port` to use a fixed port. The old default of `9001` is migrated to `0`.
 
 Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `control_url_template`, `log_level`, and `log_file`. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
 
