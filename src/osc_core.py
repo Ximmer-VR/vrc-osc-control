@@ -11,6 +11,7 @@ DEFAULT_OSC_SEND_HOST = "127.0.0.1"
 DEFAULT_OSC_SEND_PORT = 9000
 OSC_TYPE_NAMES = {"i": "int", "f": "float", "s": "string", "T": "bool", "F": "bool"}
 SUPPORTED_TYPES = ("bool", "int", "float", "string")
+OSC_TYPE_TAGS = {"bool": "T", "int": "i", "float": "f", "string": "s"}
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +27,45 @@ class OscQueryConnection:
     url: str
     osc_host: str
     osc_port: int
+
+
+def build_oscquery_host_info(name, osc_ip, osc_port):
+    return {
+        "NAME": name,
+        "EXTENSIONS": {
+            "ACCESS": True,
+            "CLIPMODE": False,
+            "RANGE": True,
+            "TYPE": True,
+            "VALUE": True,
+        },
+        "OSC_IP": osc_ip,
+        "OSC_PORT": osc_port,
+        "OSC_TRANSPORT": "UDP",
+    }
+
+
+def build_oscquery_tree(endpoints):
+    root = {"FULL_PATH": "/", "CONTENTS": {}}
+    for path, parameter_type in endpoints:
+        type_tag = OSC_TYPE_TAGS.get(parameter_type)
+        if (
+            not type_tag
+            or not path.startswith("/")
+            or path == "/"
+            or any(not part for part in path.strip("/").split("/"))
+        ):
+            continue
+        node = root
+        parts = path.strip("/").split("/")
+        for index, part in enumerate(parts):
+            contents = node.setdefault("CONTENTS", {})
+            full_path = "/" + "/".join(parts[: index + 1])
+            child = contents.setdefault(part, {"FULL_PATH": full_path})
+            node = child
+        node["TYPE"] = type_tag
+        node["ACCESS"] = 2
+    return root
 
 
 def _load_shared_parameter_data(file_path):

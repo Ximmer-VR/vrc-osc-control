@@ -3,10 +3,13 @@
 # Personal noncommercial use and private modifications only; see LICENSE.
 
 import asyncio
+import ipaddress
 import json
 import logging
 import queue
+import socket
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 import os
 import threading
@@ -15,7 +18,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, X, Y, StringVar, Tk, messagebox
 from tkinter import ttk
-from urllib.parse import quote
+from urllib.parse import unquote, urlsplit
 
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import ThreadingOSCUDPServer
@@ -30,7 +33,9 @@ from osc_core import (
     UnsupportedProtocolVersion,
     build_add_parameters,
     build_clear_parameters,
+    build_oscquery_host_info,
     build_oscquery_connection,
+    build_oscquery_tree,
     build_parameter_update,
     build_registration_payload,
     build_remove_parameters,
@@ -56,6 +61,8 @@ SHARED_PARAMETERS_FILE = APP_DATA_DIRECTORY / "shared_parameters.json"
 SETTINGS_FILE = APP_DATA_DIRECTORY / "settings.json"
 DEFAULT_OSCQUERY_URL = "http://127.0.0.1:9001/"
 OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
+OSC_SERVICE_TYPE = "_osc._udp.local."
+OSC_SERVICE_NAME = "VRChat OSC Control"
 AVATAR_CHANGE_REFRESH_DELAY_MS = 500
 APP_VERSION = "0.1"
 DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
@@ -149,7 +156,7 @@ def default_settings(app_data_directory):
         "osc_send_host": None,
         "osc_send_port": None,
         "osc_receive_host": "127.0.0.1",
-        "osc_receive_port": 9001,
+        "osc_receive_port": 0,
         "api_websocket_url": DEFAULT_API_WS_URL,
         "log_level": "INFO",
         "log_file": str(app_data_directory / "app.log"),
@@ -187,9 +194,12 @@ def load_settings(settings_file):
                     value = int(value)
                 except (TypeError, ValueError):
                     value = defaults[key]
-            if isinstance(value, bool) or not 1 <= value <= 65535:
+            minimum_port = 0 if key == "osc_receive_port" else 1
+            if isinstance(value, bool) or not minimum_port <= value <= 65535:
                 value = defaults[key]
         merged[key] = value
+    if merged["osc_receive_port"] == 9001:
+        merged["osc_receive_port"] = defaults["osc_receive_port"]
     for key in ("osc_receive_host", "api_websocket_url", "log_level", "log_file"):
         if not isinstance(merged[key], str) or not merged[key].strip():
             merged[key] = defaults[key]
@@ -279,6 +289,12 @@ class OscControlApp:
         self.discovery_stop = threading.Event()
         self.session_thread = None
         self.osc_server = None
+        self.oscquery_http_server = None
+        self.oscquery_http_thread = None
+        self.osc_service_infos = []
+        self.osc_advertised_host = None
+        self.oscquery_endpoints_lock = threading.Lock()
+        self.oscquery_endpoints = (("/avatar/change", "string"),)
         self.zeroconf = None
         self.service_browser = None
 
@@ -418,24 +434,151 @@ class OscControlApp:
         ttk.Label(outer, textvariable=self.status_var, anchor="w").pack(fill=X, pady=(9, 0))
 
     def _start_osc_listener(self):
-        logger.info(
-            "Starting VRChat OSC listener on %s:%s",
-            self.osc_receive_host,
-            self.osc_receive_port,
-        )
+        logger.info("Starting VRChat OSC listener on %s:%s", self.osc_receive_host, self.osc_receive_port)
         dispatcher = Dispatcher()
         dispatcher.map("/avatar/change", self._on_avatar_change)
         dispatcher.set_default_handler(self._on_osc_parameter)
         try:
-            self.osc_server = ThreadingOSCUDPServer(
-                (self.osc_receive_host, self.osc_receive_port), dispatcher
-            )
+            self.osc_server = ThreadingOSCUDPServer((self.osc_receive_host, self.osc_receive_port), dispatcher)
+            logger.debug("OSC server created on port %s", self.osc_server.server_address[1])
+
         except OSError as error:
             logger.exception("Could not start VRChat OSC listener")
             self.status_var.set(f"Could not listen for VRChat avatar changes: {error}")
             return
+        self.osc_receive_port = self.osc_server.server_address[1]
+        self.osc_advertised_host = self._get_osc_advertised_host()
         threading.Thread(target=self.osc_server.serve_forever, daemon=True).start()
-        logger.info("VRChat OSC listener started")
+        logger.info("VRChat OSC listener started on %s:%s", self.osc_advertised_host, self.osc_receive_port)
+
+    def _get_osc_advertised_host(self):
+        bound_host = self.osc_server.server_address[0]
+        try:
+            address = ipaddress.ip_address(bound_host)
+        except ValueError:
+            address = ipaddress.ip_address(socket.gethostbyname(bound_host))
+        if not address.is_unspecified:
+            return str(address)
+        try:
+            results = socket.getaddrinfo(
+                socket.gethostname(), None, socket.AF_INET, socket.SOCK_DGRAM
+            )
+        except OSError:
+            logger.warning("Could not resolve local network addresses for OSC advertisement")
+            results = ()
+        for result in results:
+            candidate = ipaddress.ip_address(result[4][0])
+            if not candidate.is_loopback and not candidate.is_unspecified:
+                return str(candidate)
+        return "127.0.0.1"
+
+    def _start_oscquery_http_server(self):
+        app = self
+
+        class OSCQueryRequestHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                request = urlsplit(self.path)
+                if "HOST_INFO" in request.query.split("&"):
+                    response = build_oscquery_host_info(
+                        OSC_SERVICE_NAME,
+                        app.osc_advertised_host,
+                        app.osc_receive_port,
+                    )
+                else:
+                    with app.oscquery_endpoints_lock:
+                        endpoints = app.oscquery_endpoints
+                    response = build_oscquery_tree(endpoints)
+                    node = response
+                    request_path = unquote(request.path)
+                    if request_path != "/":
+                        for part in request_path.strip("/").split("/"):
+                            node = node.get("CONTENTS", {}).get(part)
+                            if node is None:
+                                self.send_error(404, "OSC path not found")
+                                return
+                        response = node
+                body = json.dumps(response).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format_string, *args):
+                logger.debug("OSCQuery HTTP request: " + format_string, *args)
+
+        self.oscquery_http_server = ThreadingHTTPServer(
+            (self.osc_receive_host, 0), OSCQueryRequestHandler
+        )
+        self.oscquery_http_server.daemon_threads = True
+        self.oscquery_http_thread = threading.Thread(
+            target=self.oscquery_http_server.serve_forever, daemon=True
+        )
+        self.oscquery_http_thread.start()
+
+    def _register_osc_services(self):
+        if self.osc_server is None:
+            return
+
+        from zeroconf import ServiceInfo
+
+        ip_address = ipaddress.ip_address(self.osc_advertised_host).packed
+        server_name = f"osc-control-{os.getpid()}.local."
+        service_name = f"{OSC_SERVICE_NAME}.{OSC_SERVICE_TYPE}"
+        osc_service = ServiceInfo(
+            OSC_SERVICE_TYPE,
+            service_name,
+            addresses=[ip_address],
+            port=self.osc_receive_port,
+            server=server_name,
+        )
+        try:
+            self.zeroconf.register_service(osc_service, allow_name_change=True)
+            self.osc_service_infos.append(osc_service)
+            logger.info(
+                "Advertised OSC receiver on %s:%s",
+                self.osc_advertised_host,
+                self.osc_receive_port,
+            )
+        except Exception as error:
+            logger.exception("Could not advertise the OSC UDP receiver")
+            self.root.after(
+                0,
+                lambda error=error: self.status_var.set(
+                    f"OSC listener is active, but receiver advertising failed: {error}"
+                ),
+            )
+
+        try:
+            self._start_oscquery_http_server()
+            oscquery_service = ServiceInfo(
+                OSCQUERY_SERVICE_TYPE,
+                f"{OSC_SERVICE_NAME}.{OSCQUERY_SERVICE_TYPE}",
+                addresses=[ip_address],
+                port=self.oscquery_http_server.server_port,
+                server=server_name,
+            )
+            self.zeroconf.register_service(oscquery_service, allow_name_change=True)
+            self.osc_service_infos.append(oscquery_service)
+            logger.info(
+                "Advertised OSCQuery service on %s:%s",
+                self.osc_advertised_host,
+                self.oscquery_http_server.server_port,
+            )
+        except Exception as error:
+            logger.exception("Could not advertise the OSCQuery HTTP service")
+            self.root.after(
+                0,
+                lambda error=error: self.status_var.set(
+                    f"OSC listener is active, but OSCQuery advertising failed: {error}"
+                ),
+            )
+
+    def _update_oscquery_endpoints(self):
+        endpoints = [("/avatar/change", "string")]
+        endpoints.extend((parameter.path, parameter.type) for parameter in self.parameters.values())
+        with self.oscquery_endpoints_lock:
+            self.oscquery_endpoints = tuple(endpoints)
 
     def _start_service_discovery(self):
         threading.Thread(target=self._discover_oscquery_service, daemon=True).start()
@@ -451,6 +594,8 @@ class OscControlApp:
                     self.update_service(zeroconf, service_type, name)
 
                 def update_service(self, zeroconf, service_type, name):
+                    if name.startswith(f"{OSC_SERVICE_NAME}."):
+                        return
                     service_info = zeroconf.get_service_info(service_type, name, timeout=3000)
                     if service_info is None:
                         logger.warning("Could not resolve OSCQuery service %s", name)
@@ -478,6 +623,7 @@ class OscControlApp:
                     logger.info("OSCQuery service removed: %s", name)
 
             self.zeroconf = Zeroconf()
+            self._register_osc_services()
             self.service_browser = ServiceBrowser(
                 self.zeroconf, OSCQUERY_SERVICE_TYPE, OscQueryListener()
             )
@@ -550,6 +696,7 @@ class OscControlApp:
 
     def _replace_shared_parameters(self, parameters):
         self.parameters = {parameter.path: parameter for parameter in parameters}
+        self._update_oscquery_endpoints()
         self.registered_list.delete(*self.registered_list.get_children())
         for parameter in parameters:
             self.registered_list.insert(
@@ -673,6 +820,7 @@ class OscControlApp:
             return
         parameter = Parameter(path=path, name=name, type=parameter_type)
         self.parameters[path] = parameter
+        self._update_oscquery_endpoints()
         self.registered_list.insert("", END, iid=path, values=(name, path, parameter_type))
         logger.info("Added shared parameter name=%r path=%r type=%s", name, path, parameter_type)
         self._persist_current_shared_parameters()
@@ -726,6 +874,7 @@ class OscControlApp:
             self.registered_list.delete(path)
             logger.info("Removed shared parameter path=%r", path)
         if paths:
+            self._update_oscquery_endpoints()
             self._persist_current_shared_parameters()
             if self.websocket_ready.is_set():
                 self.parameter_update_queue.put(("remove_parameters", paths))
@@ -854,6 +1003,7 @@ class OscControlApp:
                     self.registered_list.delete(parameter.path)
                     removed = True
             if removed:
+                self._update_oscquery_endpoints()
                 self._persist_current_shared_parameters()
             self.status_var.set(f"Ignored unavailable avatar parameters: {parameter_details}")
 
@@ -868,6 +1018,7 @@ class OscControlApp:
                 )
 
     async def _websocket_session(self, parameters, fallback_avatar_id):
+        logger.debug("Creating osc client on %s:%s", self.osc_send_host, self.osc_send_port)
         osc_client = SimpleUDPClient(self.osc_send_host, self.osc_send_port)
         try:
             avatar_id, values = await asyncio.to_thread(self._read_registration_state, parameters, fallback_avatar_id)
@@ -1070,7 +1221,18 @@ class OscControlApp:
         if self.service_browser:
             self.service_browser.cancel()
         if self.zeroconf:
+            for service_info in self.osc_service_infos:
+                try:
+                    self.zeroconf.unregister_service(service_info)
+                except Exception:
+                    logger.exception(
+                        "Could not withdraw OSC service advertisement %s",
+                        service_info.name,
+                    )
             self.zeroconf.close()
+        if self.oscquery_http_server:
+            self.oscquery_http_server.shutdown()
+            self.oscquery_http_server.server_close()
         if self.osc_server:
             self.osc_server.shutdown()
             self.osc_server.server_close()
