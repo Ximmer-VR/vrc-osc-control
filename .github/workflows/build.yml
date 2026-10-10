@@ -1,0 +1,35 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v5
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.10'
+        architecture: 'x64'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if (Test-Path requirements.txt) { pip install -r requirements.txt }
+
+    - name: Build Executable with PyInstaller
+      run: |
+        pyinstaller --onefile --windowed --icon=./src/resource/icon.ico --add-data="./src/resource/icon.ico;resource" src/osccontrol.py
+
+    - name: Upload Finished EXE Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Windows-Executable
+        path: dist/*.exe
