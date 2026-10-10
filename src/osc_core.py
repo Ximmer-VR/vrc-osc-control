@@ -291,13 +291,16 @@ def serialize_parameters(parameters, values):
     ]
 
 
-def build_registration_payload(avatar_name, parameters, values):
-    return {
+def build_registration_payload(avatar_name, parameters, values, supporter_key=None):
+    payload = {
         "type": "register",
         "version": 1,
         "avatar_name": avatar_name,
         "parameters": serialize_parameters(parameters, values),
     }
+    if supporter_key:
+        payload["supporter_key"] = supporter_key
+    return payload
 
 
 def build_add_parameters(token, parameters, values):
