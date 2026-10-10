@@ -430,7 +430,7 @@ class OscControlApp:
         supporter_key_row = ttk.Frame(session)
         supporter_key_row.pack(fill=X, pady=(0, 8))
         ttk.Label(supporter_key_row, text="Supporter key", width=15).pack(side=LEFT)
-        ttk.Entry(supporter_key_row, textvariable=self.supporter_key_var).pack(
+        ttk.Entry(supporter_key_row, textvariable=self.supporter_key_var, show="*", width=32).pack(
             side=LEFT, fill=X, expand=True
         )
         self.register_button = ttk.Button(
