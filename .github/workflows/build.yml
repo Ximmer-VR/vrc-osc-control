@@ -3,7 +3,11 @@ name: Build Windows Executable
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -12,6 +16,28 @@ jobs:
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+
+    - name: Check whether tag points to main
+      id: main-tag
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
+      run: |
+        git fetch origin main:refs/remotes/origin/main
+        if ($LASTEXITCODE -ne 0) {
+          throw "Failed to fetch the main branch."
+        }
+
+        git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+        $ancestorCheckExitCode = $LASTEXITCODE
+        if ($ancestorCheckExitCode -eq 0) {
+          "is_main_tag=true" >> $env:GITHUB_OUTPUT
+        } elseif ($ancestorCheckExitCode -eq 1) {
+          "is_main_tag=false" >> $env:GITHUB_OUTPUT
+        } else {
+          throw "Failed to check whether the tag points to main."
+        }
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -33,3 +59,10 @@ jobs:
       with:
         name: Windows-Executable
         path: dist/*.exe
+
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/') && steps.main-tag.outputs.is_main_tag == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        generate_release_notes: true
+        files: dist/*.exe
