@@ -158,6 +158,7 @@ def default_settings(app_data_directory):
         "osc_receive_host": "127.0.0.1",
         "osc_receive_port": 0,
         "api_websocket_url": DEFAULT_API_WS_URL,
+        "supporter_key": "",
         "log_level": "INFO",
         "log_file": str(app_data_directory / "app.log"),
     }
@@ -203,10 +204,18 @@ def load_settings(settings_file):
     for key in ("osc_receive_host", "api_websocket_url", "log_level", "log_file"):
         if not isinstance(merged[key], str) or not merged[key].strip():
             merged[key] = defaults[key]
+    if not isinstance(merged["supporter_key"], str):
+        merged["supporter_key"] = defaults["supporter_key"]
     merged["log_level"] = merged["log_level"].upper()
     if not isinstance(getattr(logging, merged["log_level"], None), int):
         merged["log_level"] = defaults["log_level"]
     return merged
+
+
+def save_settings(settings_file, settings):
+    settings_file = Path(settings_file)
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    settings_file.write_text(json.dumps(settings, indent=4) + "\n", encoding="utf-8")
 
 
 def configure_logging(settings):
@@ -271,7 +280,7 @@ class OscControlApp:
         self.settings = settings
         self.root.title(f"VRChat OSC Control v{APP_VERSION}")
         self.root.geometry("780x650")
-        self.root.minsize(660, 900)
+        self.root.minsize(660, 950)
 
         self.parameters = {}
         self.parameter_values = {}
@@ -305,6 +314,7 @@ class OscControlApp:
         self.custom_name_var = StringVar()
         self.type_var = StringVar(value="float")
         self.share_link_var = StringVar()
+        self.supporter_key_var = StringVar(value=settings["supporter_key"])
         self.parameter_filter_var = StringVar()
         self.parameter_count_var = StringVar(value="0 parameters")
 
@@ -417,6 +427,12 @@ class OscControlApp:
 
         session = ttk.Labelframe(outer, text="Control session", padding=10)
         session.pack(fill=X, pady=(12, 0))
+        supporter_key_row = ttk.Frame(session)
+        supporter_key_row.pack(fill=X, pady=(0, 8))
+        ttk.Label(supporter_key_row, text="Supporter key", width=15).pack(side=LEFT)
+        ttk.Entry(supporter_key_row, textvariable=self.supporter_key_var).pack(
+            side=LEFT, fill=X, expand=True
+        )
         self.register_button = ttk.Button(
             session, text="Connect and create share link", command=self.register_session
         )
@@ -880,6 +896,14 @@ class OscControlApp:
                 self.parameter_update_queue.put(("remove_parameters", paths))
 
     def register_session(self):
+        self.settings["supporter_key"] = self.supporter_key_var.get().strip()
+        try:
+            save_settings(SETTINGS_FILE, self.settings)
+        except OSError as error:
+            logger.exception("Could not save settings")
+            messagebox.showerror("Could not save settings", str(error))
+            return
+
         if not self.parameters:
             logger.warning("Session registration requested with no configured parameters")
             messagebox.showinfo("No parameters", "Add at least one parameter before creating a session.")
@@ -1032,7 +1056,12 @@ class OscControlApp:
                 self.settings["api_websocket_url"]
             )
             async with websocket_connection as websocket:
-                payload = build_registration_payload(avatar_name, parameters, values)
+                payload = build_registration_payload(
+                    avatar_name,
+                    parameters,
+                    values,
+                    supporter_key=self.settings["supporter_key"],
+                )
                 logger.debug("Sending registration message for %s parameters", len(payload["parameters"]))
                 await websocket.send(json.dumps(payload))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)

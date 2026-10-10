@@ -31,7 +31,7 @@ Avatar parameter definitions and initial values are read from OSCQuery. The app 
 
 On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json` with defaults. Edit that file to configure connection and logging settings. OSCQuery and outgoing OSC overrides default to `null`, which lets Zeroconf discovery supply connection information. The receive listener defaults to `127.0.0.1` and `osc_receive_port: 0`; port `0` asks the OS for an available UDP port, which the app advertises to VRChat. Set a nonzero `osc_receive_port` to use a fixed port. The old default of `9001` is migrated to `0`.
 
-Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `control_url_template`, `log_level`, and `log_file`. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
+Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `supporter_key`, `control_url_template`, `log_level`, and `log_file`. Enter the optional `supporter_key` in the Control session area; it is saved to settings when you connect and included in the `register` message when nonempty. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
 
 Avatar names and shared parameter definitions are saved per avatar to `%LOCALAPPDATA%\VRChatOSCControl\shared_parameters.json`. When the avatar ID changes, the app loads that avatar's saved name and parameter set. Override the location with `VRCHAT_OSC_SHARED_PARAMETERS_FILE`.
 
@@ -43,6 +43,7 @@ The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_AP
 {
   "type": "register",
   "version": 1,
+  "supporter_key": "<optional supporter key>",
   "parameters": [
     {
       "path": "/avatar/parameters/Wave",
