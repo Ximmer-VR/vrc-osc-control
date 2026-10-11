@@ -5,6 +5,7 @@
 import ipaddress
 import json
 import logging
+import math
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,9 @@ class Parameter:
     path: str
     name: str
     type: str
+    min: int | float | None = None
+    max: int | float | None = None
+    slider: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,7 +117,26 @@ def load_shared_parameters(file_path, avatar_id):
             or name.casefold() in names
         ):
             continue
-        parameter = Parameter(path=path, name=name, type=parameter_type)
+        try:
+            minimum = _coerce_parameter_bound(entry.get("min"), parameter_type)
+            maximum = _coerce_parameter_bound(entry.get("max"), parameter_type)
+        except ValueError:
+            continue
+        slider = entry.get("slider", False)
+        if (
+            (minimum is not None and maximum is not None and minimum >= maximum)
+            or not isinstance(slider, bool)
+            or (parameter_type != "int" and slider)
+        ):
+            continue
+        parameter = Parameter(
+            path=path,
+            name=name,
+            type=parameter_type,
+            min=minimum,
+            max=maximum,
+            slider=slider,
+        )
         parameters.append(parameter)
         paths.add(path)
         names.add(name.casefold())
@@ -142,10 +165,7 @@ def save_shared_parameters(file_path, avatar_id, parameters, avatar_name=None):
     name = previous_name if avatar_name is None else avatar_name.strip()
     data[avatar_id] = {
         "name": name if isinstance(name, str) else "",
-        "parameters": [
-            {"path": item.path, "name": item.name, "type": item.type}
-            for item in parameters
-        ],
+        "parameters": [_serialize_parameter_definition(item) for item in parameters],
     }
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = file_path.with_name(f"{file_path.name}.tmp")
@@ -280,15 +300,43 @@ def serialize_parameters(parameters, values):
     ]
     if missing:
         raise ValueError(f"Missing current values for: {', '.join(missing)}")
-    return [
-        {
-            "path": parameter.path,
-            "name": parameter.name,
-            "type": parameter.type,
-            "value": values[parameter.path],
-        }
-        for parameter in parameters
-    ]
+    serialized = []
+    for parameter in parameters:
+        definition = _serialize_parameter_definition(parameter)
+        definition["value"] = values[parameter.path]
+        serialized.append(definition)
+    return serialized
+
+
+def _coerce_parameter_bound(value, parameter_type):
+    if value is None:
+        return None
+    if parameter_type not in ("int", "float") or isinstance(value, bool):
+        raise ValueError("Parameter bounds are only supported for int and float types")
+    if not isinstance(value, (int, float)):
+        raise ValueError("Parameter bounds must be numeric")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Parameter bounds must be finite numbers")
+    if parameter_type == "int":
+        if int(value) != value:
+            raise ValueError("Integer parameter bounds must be whole numbers")
+        return int(value)
+    return float(value)
+
+
+def _serialize_parameter_definition(parameter):
+    definition = {
+        "path": parameter.path,
+        "name": parameter.name,
+        "type": parameter.type,
+    }
+    if parameter.min is not None:
+        definition["min"] = parameter.min
+    if parameter.max is not None:
+        definition["max"] = parameter.max
+    if parameter.type == "int" and parameter.slider:
+        definition["slider"] = True
+    return definition
 
 
 def build_registration_payload(avatar_name, parameters, values, supporter_key=None):
