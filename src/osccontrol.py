@@ -27,7 +27,6 @@ from tkinter import (
     Y,
     BooleanVar,
     StringVar,
-    Tk,
     messagebox,
 )
 import ttkbootstrap as ttk
@@ -37,11 +36,7 @@ from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import ThreadingOSCUDPServer
 from pythonosc.udp_client import SimpleUDPClient
 from osc_core import (
-    DEFAULT_OSC_SEND_HOST,
-    DEFAULT_OSC_SEND_PORT,
-    OSC_TYPE_NAMES,
     SUPPORTED_TYPES,
-    OscQueryConnection,
     Parameter,
     UnsupportedProtocolVersion,
     build_add_parameters,
@@ -59,28 +54,30 @@ from osc_core import (
     flatten_oscquery_parameters,
     load_avatar_name,
     load_shared_parameters,
-    oscquery_value,
     parse_parameter_changed,
     query_oscquery_value,
     registration_token_from_acknowledgement,
     registration_url_from_acknowledgement,
     save_shared_parameters,
-    serialize_parameters,
 )
 
+import settings
+
+APP_VERSION = "0.1.4"
 
 APP_DATA_DIRECTORY = Path(os.getenv("LOCALAPPDATA", Path.home())) / "VRChatOSCControl"
-SHARED_PARAMETERS_FILE = APP_DATA_DIRECTORY / "shared_parameters.json"
 SETTINGS_FILE = APP_DATA_DIRECTORY / "settings.json"
-DEFAULT_OSCQUERY_URL = "http://127.0.0.1:9001/"
+SHARED_PARAMETERS_FILE = APP_DATA_DIRECTORY / "shared_parameters.json"
+
+DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
+DEFAULT_AVATAR_CHANGE_REFRESH_DELAY_MS = 500
+DEFAULT_API_WS_RETRIES = 3
+DEFAULT_API_WS_RETRY_DELAY_SECONDS = 1
+
 OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
 OSC_SERVICE_TYPE = "_osc._udp.local."
 OSC_SERVICE_NAME = "VRChat OSC Control"
-AVATAR_CHANGE_REFRESH_DELAY_MS = 500
-APP_VERSION = "0.1"
-DEFAULT_API_WS_URL = "wss://osccontrol.app/ws"
-API_WS_503_RETRIES = 3
-API_WS_RETRY_DELAY_SECONDS = 1
+
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +85,10 @@ logger = logging.getLogger(__name__)
 async def _connect_control_websocket(url):
     import websockets
 
-    retries_remaining = API_WS_503_RETRIES
+    retries = settings.get("connection_retries", DEFAULT_API_WS_RETRIES)
+    retry_delay = settings.get("connection_retry_delay", DEFAULT_API_WS_RETRY_DELAY_SECONDS)
+
+    retries_remaining = retries
     while True:
         try:
             return await websockets.connect(url, open_timeout=10)
@@ -110,89 +110,20 @@ async def _connect_control_websocket(url):
             if not retry_reason or retries_remaining == 0:
                 raise
             retries_remaining -= 1
-            retry_number = API_WS_503_RETRIES - retries_remaining
+            retry_number = retries - retries_remaining
             logger.warning(
                 "Control websocket connection received %s; retrying (%s/%s)",
                 retry_cause,
                 retry_number,
-                API_WS_503_RETRIES,
+                retries,
             )
-            await asyncio.sleep(API_WS_RETRY_DELAY_SECONDS)
+            await asyncio.sleep(retry_delay)
 
 
-def default_settings(app_data_directory):
-    app_data_directory = Path(app_data_directory)
-    return {
-        "oscquery_url": None,
-        "osc_send_host": None,
-        "osc_send_port": None,
-        "osc_receive_host": "127.0.0.1",
-        "osc_receive_port": 0,
-        "api_websocket_url": DEFAULT_API_WS_URL,
-        "supporter_key": "",
-        "log_level": "INFO",
-        "log_file": str(app_data_directory / "app.log"),
-    }
-
-
-def load_settings(settings_file):
-    settings_file = Path(settings_file)
-    defaults = default_settings(settings_file.parent)
-    try:
-        settings = json.loads(settings_file.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        settings_file.parent.mkdir(parents=True, exist_ok=True)
-        settings_file.write_text(json.dumps(defaults, indent=4) + "\n", encoding="utf-8")
-        return defaults
-    except (OSError, json.JSONDecodeError) as error:
-        print(f"Could not read settings from {settings_file}; using defaults: {error}")
-        return defaults
-
-    if not isinstance(settings, dict):
-        print(f"Settings in {settings_file} must be a JSON object; using defaults")
-        return defaults
-
-    merged = {**defaults, **settings}
-    for key in ("oscquery_url", "osc_send_host"):
-        if merged[key] is not None and not isinstance(merged[key], str):
-            merged[key] = defaults[key]
-    for key in ("osc_send_port", "osc_receive_port"):
-        value = merged[key]
-        if value is not None or key == "osc_receive_port":
-            if isinstance(value, bool):
-                value = defaults[key]
-            else:
-                try:
-                    value = int(value)
-                except (TypeError, ValueError):
-                    value = defaults[key]
-            minimum_port = 0 if key == "osc_receive_port" else 1
-            if isinstance(value, bool) or not minimum_port <= value <= 65535:
-                value = defaults[key]
-        merged[key] = value
-    if merged["osc_receive_port"] == 9001:
-        merged["osc_receive_port"] = defaults["osc_receive_port"]
-    for key in ("osc_receive_host", "api_websocket_url", "log_level", "log_file"):
-        if not isinstance(merged[key], str) or not merged[key].strip():
-            merged[key] = defaults[key]
-    if not isinstance(merged["supporter_key"], str):
-        merged["supporter_key"] = defaults["supporter_key"]
-    merged["log_level"] = merged["log_level"].upper()
-    if not isinstance(getattr(logging, merged["log_level"], None), int):
-        merged["log_level"] = defaults["log_level"]
-    return merged
-
-
-def save_settings(settings_file, settings):
-    settings_file = Path(settings_file)
-    settings_file.parent.mkdir(parents=True, exist_ok=True)
-    settings_file.write_text(json.dumps(settings, indent=4) + "\n", encoding="utf-8")
-
-
-def configure_logging(settings):
-    configured_level = settings["log_level"]
+def configure_logging():
+    configured_level = settings.get("log_level", "INFO")
     level = getattr(logging, configured_level, logging.INFO)
-    log_path = Path(settings["log_file"]).expanduser()
+    log_path = Path(APP_DATA_DIRECTORY / "app.log").expanduser()
     handlers = [logging.StreamHandler()]
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,9 +177,8 @@ def set_windows_app_user_model_id():
 
 
 class OscControlApp:
-    def __init__(self, root, settings):
+    def __init__(self, root):
         self.root = root
-        self.settings = settings
         self.root.title(f"VRChat OSC Control v{APP_VERSION}")
         self.root.geometry("780x950")
         self.root.minsize(780, 950)
@@ -259,11 +189,11 @@ class OscControlApp:
         self.websocket_ready = threading.Event()
         self.available_parameters = []
         self.active_avatar = "Waiting for VRChat"
-        self.oscquery_url = settings["oscquery_url"] or DEFAULT_OSCQUERY_URL
-        self.osc_send_host = settings["osc_send_host"] or DEFAULT_OSC_SEND_HOST
-        self.osc_send_port = settings["osc_send_port"] or DEFAULT_OSC_SEND_PORT
-        self.osc_receive_host = settings["osc_receive_host"]
-        self.osc_receive_port = settings["osc_receive_port"]
+        self.oscquery_url = settings.get("oscquery_url")
+        self.osc_send_host = settings.get("osc_send_host")
+        self.osc_send_port = settings.get("osc_send_port")
+        self.osc_receive_host = settings.get("osc_receive_host", "127.0.0.1")
+        self.osc_receive_port = settings.get("osc_receive_port", 0)
         self.session_stop = threading.Event()
         self.session_token = None
         self.discovery_stop = threading.Event()
@@ -288,14 +218,13 @@ class OscControlApp:
         self.maximum_var = StringVar()
         self.slider_var = BooleanVar(value=False)
         self.share_link_var = StringVar()
-        self.supporter_key_var = StringVar(value=settings["supporter_key"])
+        self.supporter_key_var = StringVar(value=settings.get("supporter_key"))
         self.parameter_filter_var = StringVar()
         self.parameter_count_var = StringVar(value="0 parameters")
 
         self._build_ui()
         self._start_osc_listener()
         self._start_service_discovery()
-        self.root.after(250, self.refresh_parameters)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _build_ui(self):
@@ -509,13 +438,9 @@ class OscControlApp:
             def log_message(self, format_string, *args):
                 logger.debug("OSCQuery HTTP request: " + format_string, *args)
 
-        self.oscquery_http_server = ThreadingHTTPServer(
-            (self.osc_receive_host, 0), OSCQueryRequestHandler
-        )
+        self.oscquery_http_server = ThreadingHTTPServer((self.osc_receive_host, 0), OSCQueryRequestHandler)
         self.oscquery_http_server.daemon_threads = True
-        self.oscquery_http_thread = threading.Thread(
-            target=self.oscquery_http_server.serve_forever, daemon=True
-        )
+        self.oscquery_http_thread = threading.Thread(target=self.oscquery_http_server.serve_forever, daemon=True)
         self.oscquery_http_thread.start()
 
     def _register_osc_services(self):
@@ -640,11 +565,12 @@ class OscControlApp:
             )
 
     def _apply_discovered_connection(self, connection):
-        if not self.settings["oscquery_url"]:
+        logger.debug("Applying discovered OSCQuery connection: %s", connection.url)
+        if not settings.get("oscquery_url"):
             self.oscquery_url = connection.url
-        if not self.settings["osc_send_host"]:
+        if not settings.get("osc_send_host"):
             self.osc_send_host = connection.osc_host
-        if not self.settings["osc_send_port"]:
+        if not settings.get("osc_send_port"):
             self.osc_send_port = connection.osc_port
         logger.info(
             "Using OSCQuery URL %s and OSC destination %s:%s",
@@ -694,7 +620,7 @@ class OscControlApp:
             self.status_var.set(f"Loaded {len(parameters)} saved parameters for this avatar.")
         else:
             self.status_var.set("No saved shared parameters for this avatar.")
-        self.root.after(AVATAR_CHANGE_REFRESH_DELAY_MS, self.refresh_parameters)
+        self.root.after(settings.get("avatar_change_refresh_delay", DEFAULT_AVATAR_CHANGE_REFRESH_DELAY_MS), self.refresh_parameters)
 
     def _replace_shared_parameters(self, parameters):
         self.parameters = {parameter.path: parameter for parameter in parameters}
@@ -730,6 +656,7 @@ class OscControlApp:
 
     def _load_parameters(self):
         try:
+            logger.debug("Loading OSCQuery parameters from %s", self.oscquery_url)
             request = urllib.request.Request(
                 self.oscquery_url, headers={"Accept": "application/json"}
             )
@@ -796,7 +723,6 @@ class OscControlApp:
         _, parameter_type = self.available_list.item(path, "values")
         self.path_var.set(path)
         self.type_var.set(parameter_type)
-        #if not self.custom_name_var.get().strip():
         self.custom_name_var.set(path.rsplit("/", 1)[-1])
 
     def add_manual(self):
@@ -811,9 +737,7 @@ class OscControlApp:
         self.slider_checkbutton.pack_forget()
         if parameter_type in ("int", "float"):
             self.minimum_label.configure(text="Min (0)")
-            self.maximum_label.configure(
-                text="Max (255)" if parameter_type == "int" else "Max (1)"
-            )
+            self.maximum_label.configure(text="Max (255)" if parameter_type == "int" else "Max (1)")
             self.minimum_label.pack(side=LEFT)
             self.minimum_entry.pack(side=LEFT, padx=(4, 12))
             self.maximum_label.pack(side=LEFT)
@@ -933,9 +857,9 @@ class OscControlApp:
                 self.parameter_update_queue.put(("remove_parameters", paths))
 
     def register_session(self):
-        self.settings["supporter_key"] = self.supporter_key_var.get().strip()
+        settings.set("supporter_key", self.supporter_key_var.get().strip())
         try:
-            save_settings(SETTINGS_FILE, self.settings)
+            settings.save()
         except OSError as error:
             logger.exception("Could not save settings")
             messagebox.showerror("Could not save settings", str(error))
@@ -1074,9 +998,7 @@ class OscControlApp:
         for parameter in parameters:
             current_value = self.parameter_values.get(parameter.path)
             if current_value is not None and current_value != initial_values[parameter.path]:
-                self.parameter_update_queue.put(
-                    ("update_parameter", parameter.path, current_value)
-                )
+                self.parameter_update_queue.put(("update_parameter", parameter.path, current_value))
 
     async def _websocket_session(self, parameters, fallback_avatar_id):
         logger.debug("Creating osc client on %s:%s", self.osc_send_host, self.osc_send_port)
@@ -1089,16 +1011,9 @@ class OscControlApp:
             avatar_name = load_avatar_name(SHARED_PARAMETERS_FILE, avatar_id)
             logger.info("Registering %s parameters for avatar %s", len(parameters), avatar_id)
             logger.info("Connecting to control websocket")
-            websocket_connection = await _connect_control_websocket(
-                self.settings["api_websocket_url"]
-            )
+            websocket_connection = await _connect_control_websocket(settings.get("api_websocket_url", DEFAULT_API_WS_URL))
             async with websocket_connection as websocket:
-                payload = build_registration_payload(
-                    avatar_name,
-                    parameters,
-                    values,
-                    supporter_key=self.settings["supporter_key"],
-                )
+                payload = build_registration_payload(avatar_name, parameters, values, supporter_key=settings.get("supporter_key"))
                 logger.debug("Sending registration message for %s parameters", len(payload["parameters"]))
                 await websocket.send(json.dumps(payload))
                 raw_ack = await asyncio.wait_for(websocket.recv(), timeout=10)
@@ -1111,9 +1026,7 @@ class OscControlApp:
                 active_parameters = {parameter.path: parameter for parameter in parameters}
                 self.websocket_ready.set()
                 self._queue_current_parameter_updates(parameters, values)
-                self.root.after(
-                    0, lambda: self._session_ready(link, ignored_parameters)
-                )
+                self.root.after(0, lambda: self._session_ready(link, ignored_parameters))
 
                 while not self.session_stop.is_set():
                     try:
@@ -1331,13 +1244,14 @@ class OscControlApp:
 
 
 def main():
-    settings = load_settings(SETTINGS_FILE)
-    configure_logging(settings)
+    settings.load(SETTINGS_FILE)
+    configure_logging()
     logger.info("Starting VRChat OSC Control")
     set_windows_app_user_model_id()
-    root = ttk.App("VRChat OSC Control", theme="darkly")
+    root = ttk.App("VRChat OSC Control", theme=settings.get("theme", "bootstrap-dark"))
+    print(root.theme_names())
     set_application_icon(root)
-    OscControlApp(root, settings)
+    OscControlApp(root)
     root.mainloop()
 
 
