@@ -6,6 +6,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import math
 import queue
 import socket
 import sys
@@ -16,7 +17,19 @@ import threading
 import urllib.request
 import webbrowser
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, X, Y, StringVar, Tk, messagebox
+from tkinter import (
+    BOTH,
+    END,
+    LEFT,
+    RIGHT,
+    VERTICAL,
+    X,
+    Y,
+    BooleanVar,
+    StringVar,
+    Tk,
+    messagebox,
+)
 from tkinter import ttk
 from urllib.parse import unquote, urlsplit
 
@@ -313,6 +326,9 @@ class OscControlApp:
         self.path_var = StringVar()
         self.custom_name_var = StringVar()
         self.type_var = StringVar(value="float")
+        self.minimum_var = StringVar()
+        self.maximum_var = StringVar()
+        self.slider_var = BooleanVar(value=False)
         self.share_link_var = StringVar()
         self.supporter_key_var = StringVar(value=settings["supporter_key"])
         self.parameter_filter_var = StringVar()
@@ -409,6 +425,18 @@ class OscControlApp:
             manual, textvariable=self.type_var, values=SUPPORTED_TYPES, state="readonly", width=8
         ).pack(side=LEFT, padx=(0, 8))
         ttk.Button(manual, text="Add", command=self.add_manual).pack(side=LEFT)
+
+        options_row = ttk.Frame(browser)
+        options_row.pack(fill=X, pady=(8, 0))
+        self.minimum_label = ttk.Label(options_row, text="Min")
+        self.minimum_entry = ttk.Entry(options_row, textvariable=self.minimum_var, width=10)
+        self.maximum_label = ttk.Label(options_row, text="Max")
+        self.maximum_entry = ttk.Entry(options_row, textvariable=self.maximum_var, width=10)
+        self.slider_checkbutton = ttk.Checkbutton(
+            options_row, text="Use slider", variable=self.slider_var
+        )
+        self.type_var.trace_add("write", self._update_parameter_options)
+        self._update_parameter_options()
 
         registered = ttk.Labelframe(body, text="Shared parameters", padding=10)
         body.add(registered, weight=1)
@@ -816,6 +844,52 @@ class OscControlApp:
     def add_manual(self):
         self._add_parameter(self.path_var.get(), self.custom_name_var.get(), self.type_var.get())
 
+    def _update_parameter_options(self, *_args):
+        parameter_type = self.type_var.get()
+        self.minimum_label.pack_forget()
+        self.minimum_entry.pack_forget()
+        self.maximum_label.pack_forget()
+        self.maximum_entry.pack_forget()
+        self.slider_checkbutton.pack_forget()
+        if parameter_type in ("int", "float"):
+            self.minimum_label.configure(text="Min (0)")
+            self.maximum_label.configure(
+                text="Max (255)" if parameter_type == "int" else "Max (1)"
+            )
+            self.minimum_label.pack(side=LEFT)
+            self.minimum_entry.pack(side=LEFT, padx=(4, 12))
+            self.maximum_label.pack(side=LEFT)
+            self.maximum_entry.pack(side=LEFT, padx=(4, 12))
+        if parameter_type == "int":
+            self.slider_checkbutton.pack(side=LEFT)
+
+    def _read_parameter_options(self, parameter_type):
+        minimum_text = self.minimum_var.get().strip()
+        maximum_text = self.maximum_var.get().strip()
+        if parameter_type == "int":
+            parse_bound = int
+        else:
+            parse_bound = float
+
+        try:
+            minimum = parse_bound(minimum_text) if minimum_text else None
+            maximum = parse_bound(maximum_text) if maximum_text else None
+        except ValueError as error:
+            raise ValueError("Min and max must be valid numbers for the selected type.") from error
+        if parameter_type == "float":
+            if any(
+                bound is not None and not math.isfinite(bound)
+                for bound in (minimum, maximum)
+            ):
+                raise ValueError("Min and max must be finite numbers.")
+        if minimum is not None and maximum is not None and minimum >= maximum:
+            raise ValueError("Min must be less than max.")
+        return {
+            "min": minimum,
+            "max": maximum,
+            "slider": parameter_type == "int" and self.slider_var.get(),
+        }
+
     def _add_parameter(self, path, name, parameter_type):
         path = path.strip()
         name = name.strip()
@@ -828,13 +902,18 @@ class OscControlApp:
         if parameter_type not in SUPPORTED_TYPES:
             messagebox.showerror("Invalid type", "Choose bool, int, float, or string.")
             return
+        try:
+            options = self._read_parameter_options(parameter_type)
+        except ValueError as error:
+            messagebox.showerror("Invalid range", str(error))
+            return
         if any(parameter.path == path for parameter in self.parameters.values()):
             messagebox.showerror("Already added", "That OSC parameter is already registered.")
             return
         if any(parameter.name.casefold() == name.casefold() for parameter in self.parameters.values()):
             messagebox.showerror("Name already used", "Each shared name must be unique.")
             return
-        parameter = Parameter(path=path, name=name, type=parameter_type)
+        parameter = Parameter(path=path, name=name, type=parameter_type, **options)
         self.parameters[path] = parameter
         self._update_oscquery_endpoints()
         self.registered_list.insert("", END, iid=path, values=(name, path, parameter_type))
