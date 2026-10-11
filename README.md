@@ -67,6 +67,21 @@ The API generates the session token and returns a `registered` message containin
 }
 ```
 
+Float and int parameter definitions may include `min` and `max` bounds. When omitted, the API uses `0`-`1` for floats and `0`-`255` for ints. Int definitions may also set `"slider": true` to show a slider instead of a value input:
+
+```json
+{
+  "path": "/avatar/parameters/Speed",
+  "name": "Speed",
+  "type": "float",
+  "min": 0.0,
+  "max": 1.0,
+  "value": 0.25
+}
+```
+
+The desktop app provides optional min/max fields for float and int parameters and a slider checkbox for ints. Empty bounds are omitted from registration so the API defaults apply.
+
 The app puts the API-provided URL in the control session link and uses the token for subsequent updates. If the response omits `url`, the app falls back to the configured `control_url_template`. The app expects remote changes in this format:
 
 If the websocket connection attempt receives HTTP 503 or closes with code 1013 and reason `instance draining`, the app retries the connection up to three times to allow the load balancer to route it to another API shard.
