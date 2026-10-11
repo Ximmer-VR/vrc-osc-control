@@ -3,6 +3,4 @@ requests
 python-osc
 websockets
 zeroconf
-sv-ttk
-darkdetect
-pywinstyles; sys_platform == "win32"
+ttkbootstrap
