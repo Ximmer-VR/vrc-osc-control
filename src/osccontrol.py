@@ -30,7 +30,7 @@ from tkinter import (
     Tk,
     messagebox,
 )
-from tkinter import ttk
+import ttkbootstrap as ttk
 from urllib.parse import unquote, urlsplit
 
 from pythonosc.dispatcher import Dispatcher
@@ -118,48 +118,6 @@ async def _connect_control_websocket(url):
                 API_WS_503_RETRIES,
             )
             await asyncio.sleep(API_WS_RETRY_DELAY_SECONDS)
-
-
-def normalize_system_theme(theme):
-    return "dark" if isinstance(theme, str) and theme.casefold() == "dark" else "light"
-
-
-def apply_system_theme(root, theme):
-    import sv_ttk
-
-    mode = normalize_system_theme(theme)
-    sv_ttk.set_theme(mode)
-    if sys.platform == "win32":
-        try:
-            import pywinstyles
-
-            pywinstyles.apply_style(root, mode)
-        except Exception:
-            logger.debug("Could not update Windows title bar theme", exc_info=True)
-    logger.info("Applied %s system theme", mode)
-
-
-def follow_system_theme(root):
-    try:
-        import darkdetect
-    except ImportError:
-        logger.exception("darkdetect is unavailable; using the default Tk theme")
-        return
-
-    apply_system_theme(root, darkdetect.theme())
-
-    def on_theme_change(theme):
-        try:
-            root.after(0, lambda: apply_system_theme(root, theme))
-        except Exception:
-            logger.debug("Could not schedule system theme update", exc_info=True)
-
-    threading.Thread(
-        target=darkdetect.listener,
-        args=(on_theme_change,),
-        name="SystemThemeListener",
-        daemon=True,
-    ).start()
 
 
 def default_settings(app_data_directory):
@@ -292,8 +250,8 @@ class OscControlApp:
         self.root = root
         self.settings = settings
         self.root.title(f"VRChat OSC Control v{APP_VERSION}")
-        self.root.geometry("780x650")
-        self.root.minsize(660, 950)
+        self.root.geometry("780x950")
+        self.root.minsize(780, 950)
 
         self.parameters = {}
         self.parameter_values = {}
@@ -1377,9 +1335,8 @@ def main():
     configure_logging(settings)
     logger.info("Starting VRChat OSC Control")
     set_windows_app_user_model_id()
-    root = Tk()
+    root = ttk.App("VRChat OSC Control", theme="darkly")
     set_application_icon(root)
-    follow_system_theme(root)
     OscControlApp(root, settings)
     root.mainloop()
 
