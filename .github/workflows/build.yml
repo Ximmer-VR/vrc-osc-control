@@ -42,7 +42,7 @@ jobs:
             src/osccontrol.py
 
       - name: Upload Windows Build
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: Windows-Build
           path: dist/vrc-osc-control-windows.exe
@@ -73,7 +73,7 @@ jobs:
             src/osccontrol.py
 
       - name: Upload Linux Build
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: Linux-Build
           path: dist/vrc-osc-control-linux
@@ -104,7 +104,7 @@ jobs:
             src/osccontrol.py
 
       - name: Upload macOS Build
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: macOS-Build
           path: dist/vrc-osc-control-macos
