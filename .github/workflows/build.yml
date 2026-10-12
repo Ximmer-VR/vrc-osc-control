@@ -1,67 +1,156 @@
-name: Build Windows Executable
+
+name: Build Applications
 
 on:
   push:
-    tags: [ "v*" ]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v5
-      with:
-        fetch-depth: 0
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-    - name: Check whether tag points to main
-      id: main-tag
-      if: startsWith(github.ref, 'refs/tags/')
-      shell: pwsh
-      run: |
-        git fetch origin main:refs/remotes/origin/main
-        if ($LASTEXITCODE -ne 0) {
-          throw "Failed to fetch the main branch."
-        }
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          architecture: x64
 
-        git merge-base --is-ancestor $env:GITHUB_SHA origin/main
-        $ancestorCheckExitCode = $LASTEXITCODE
-        if ($ancestorCheckExitCode -eq 0) {
-          "is_main_tag=true" >> $env:GITHUB_OUTPUT
-        } elseif ($ancestorCheckExitCode -eq 1) {
-          "is_main_tag=false" >> $env:GITHUB_OUTPUT
-        } else {
-          throw "Failed to check whether the tag points to main."
-        }
+      - name: Install Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.10'
-        architecture: 'x64'
+      - name: Build Executable
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm --onefile --windowed `
+            --name vrc-osc-control-windows `
+            --icon=./src/resource/icon.ico `
+            --add-data="./src/resource/icon.ico;resource" `
+            src/osccontrol.py
 
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        if (Test-Path requirements.txt) { pip install -r requirements.txt }
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v5
+        with:
+          name: Windows-Build
+          path: dist/vrc-osc-control-windows.exe
 
-    - name: Build Executable with PyInstaller
-      run: |
-        pyinstaller --onefile --windowed --icon=./src/resource/icon.ico --add-data="./src/resource/icon.ico;resource" src/osccontrol.py
+  build-linux:
+    runs-on: ubuntu-latest
 
-    - name: Upload Finished EXE Artifact
-      uses: actions/upload-artifact@v5
-      with:
-        name: Windows-Executable
-        path: dist/*.exe
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
 
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/') && steps.main-tag.outputs.is_main_tag == 'true'
-      uses: softprops/action-gh-release@v2
-      with:
-        generate_release_notes: true
-        files: dist/*.exe
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Build Executable
+        run: |
+          pyinstaller --clean --noconfirm --onefile --windowed \
+            --name vrc-osc-control-linux \
+            --add-data="./src/resource/icon.ico:resource" \
+            src/osccontrol.py
+
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v5
+        with:
+          name: Linux-Build
+          path: dist/vrc-osc-control-linux
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Build Executable
+        run: |
+          pyinstaller --clean --noconfirm --onefile --windowed \
+            --name vrc-osc-control-macos \
+            --add-data="./src/resource/icon.ico:resource" \
+            src/osccontrol.py
+
+      - name: Upload macOS Build
+        uses: actions/upload-artifact@v5
+        with:
+          name: macOS-Build
+          path: dist/vrc-osc-control-macos
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build-windows
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check whether tag points to main
+        id: main-tag
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "is_main_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            result=$?
+            if [ "$result" -eq 1 ]; then
+              echo "is_main_tag=false" >> "$GITHUB_OUTPUT"
+            else
+              exit "$result"
+            fi
+          fi
+
+      - name: Download All Builds
+        if: steps.main-tag.outputs.is_main_tag == 'true'
+        uses: actions/download-artifact@v6
+        with:
+          path: release-files
+          merge-multiple: false
+
+      - name: Create GitHub Release
+        if: steps.main-tag.outputs.is_main_tag == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-files/Windows-Build/vrc-osc-control-windows.exe
+            release-files/Linux-Build/vrc-osc-control-linux
+            release-files/macOS-Build/vrc-osc-control-macos
