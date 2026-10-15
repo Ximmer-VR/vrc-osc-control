@@ -243,11 +243,14 @@ def flatten_oscquery_parameters(document):
     return sorted(found.items())
 
 
-def filter_oscquery_parameters(parameters, query):
+def filter_oscquery_parameters(parameters, query, excluded_paths=()):
     query = query.strip().casefold()
-    if not query:
-        return list(parameters)
-    return [(path, parameter_type) for path, parameter_type in parameters if query in path.casefold()]
+    excluded_paths = set(excluded_paths)
+    return [
+        (path, parameter_type)
+        for path, parameter_type in parameters
+        if path not in excluded_paths and (not query or query in path.casefold())
+    ]
 
 
 def oscquery_value(document):
