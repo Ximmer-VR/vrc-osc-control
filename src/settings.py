@@ -39,6 +39,12 @@ def save():
 def set(key, value):
     global settings
 
+    # if value is an array or dictionary, store that array or dictionary as is, otherwise convert it to a string
+    if isinstance(value, (list, dict)):
+        settings[key] = value
+        return
+
+    # if value is not a string, int, float, or bool, convert it to a string
     if not isinstance(value, (str, int, float, bool)) and value is not None:
         value = str(value)
 

@@ -78,6 +78,37 @@ OSCQUERY_SERVICE_TYPE = "_oscjson._tcp.local."
 OSC_SERVICE_TYPE = "_osc._udp.local."
 OSC_SERVICE_NAME = "VRChat OSC Control"
 
+DEFAULT_EXCLUDED_PATHS = [
+    "/avatar/parameters/AFK",
+    "/avatar/parameters/AngularY",
+    "/avatar/parameters/Earmuffs",
+    "/avatar/parameters/EyeHeightAsMeters",
+    "/avatar/parameters/EyeHeightAsPercent",
+    "/avatar/parameters/GestureLeft",
+    "/avatar/parameters/GestureLeftWeight",
+    "/avatar/parameters/GestureRight",
+    "/avatar/parameters/GestureRightWeight",
+    "/avatar/parameters/Grounded",
+    "/avatar/parameters/InStation",
+    "/avatar/parameters/IsAnimatorEnabled",
+    "/avatar/parameters/IsOnFriendsList",
+    "/avatar/parameters/MuteSelf",
+    "/avatar/parameters/PreviewMode",
+    "/avatar/parameters/ScaleFactor",
+    "/avatar/parameters/ScaleFactorInverse",
+    "/avatar/parameters/ScaleModified",
+    "/avatar/parameters/Seated",
+    "/avatar/parameters/TrackingType",
+    "/avatar/parameters/Upright",
+    "/avatar/parameters/VRMode",
+    "/avatar/parameters/VelocityMagnitude",
+    "/avatar/parameters/VelocityX",
+    "/avatar/parameters/VelocityY",
+    "/avatar/parameters/VelocityZ",
+    "/avatar/parameters/Viseme",
+    "/avatar/parameters/VisemesEnable",
+    "/avatar/parameters/Voice",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +219,16 @@ class OscControlApp:
         self.parameter_update_queue = queue.Queue()
         self.websocket_ready = threading.Event()
         self.available_parameters = []
+        excluded_paths = settings.get("exclude", DEFAULT_EXCLUDED_PATHS)
+        if not isinstance(excluded_paths, list):
+            logger.warning("Ignoring invalid 'exclude' setting; expected a list of OSC paths")
+            excluded_paths = []
+        invalid_excluded_paths = [path for path in excluded_paths if not isinstance(path, str)]
+        if invalid_excluded_paths:
+            logger.warning("Ignoring non-string entries in the 'exclude' setting")
+        self.excluded_parameter_paths = {
+            path for path in excluded_paths if isinstance(path, str)
+        }
         self.active_avatar = "Waiting for VRChat"
         self.oscquery_url = settings.get("oscquery_url")
         self.osc_send_host = settings.get("osc_send_host")
@@ -705,7 +746,9 @@ class OscControlApp:
         selected = self.available_list.selection()
         selected_path = selected[0] if selected else None
         filtered = filter_oscquery_parameters(
-            self.available_parameters, self.parameter_filter_var.get()
+            self.available_parameters,
+            self.parameter_filter_var.get(),
+            self.excluded_parameter_paths,
         )
         self.available_list.delete(*self.available_list.get_children())
         for path, parameter_type in filtered:
@@ -713,7 +756,10 @@ class OscControlApp:
         if selected_path in {path for path, _ in filtered}:
             self.available_list.selection_set(selected_path)
             self.available_list.focus(selected_path)
-        self.parameter_count_var.set(f"{len(filtered)} of {len(self.available_parameters)}")
+        visible_parameters = filter_oscquery_parameters(
+            self.available_parameters, "", self.excluded_parameter_paths
+        )
+        self.parameter_count_var.set(f"{len(filtered)} of {len(visible_parameters)}")
 
     def _select_available(self, _event=None):
         selection = self.available_list.selection()
