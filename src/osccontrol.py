@@ -63,7 +63,7 @@ from osc_core import (
 
 import settings
 
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 
 APP_DATA_DIRECTORY = Path(os.getenv("LOCALAPPDATA", Path.home())) / "VRChatOSCControl"
 SETTINGS_FILE = APP_DATA_DIRECTORY / "settings.json"
@@ -108,6 +108,7 @@ DEFAULT_EXCLUDED_PATHS = [
     "/avatar/parameters/Viseme",
     "/avatar/parameters/VisemesEnable",
     "/avatar/parameters/Voice",
+    "/avatar/parameters/FT/*",
 ]
 
 logger = logging.getLogger(__name__)
