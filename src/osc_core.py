@@ -8,6 +8,7 @@ import logging
 import math
 import urllib.request
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from urllib.parse import quote
 
@@ -245,11 +246,14 @@ def flatten_oscquery_parameters(document):
 
 def filter_oscquery_parameters(parameters, query, excluded_paths=()):
     query = query.strip().casefold()
-    excluded_paths = set(excluded_paths)
+    exact_exclusions = {path for path in excluded_paths if "*" not in path}
+    wildcard_exclusions = [path for path in excluded_paths if "*" in path]
     return [
         (path, parameter_type)
         for path, parameter_type in parameters
-        if path not in excluded_paths and (not query or query in path.casefold())
+        if path not in exact_exclusions
+        and not any(fnmatchcase(path, pattern) for pattern in wildcard_exclusions)
+        and (not query or query in path.casefold())
     ]
 
 
