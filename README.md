@@ -31,7 +31,7 @@ Avatar parameter definitions and initial values are read from OSCQuery. The app 
 
 On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json` with defaults. Edit that file to configure connection and logging settings. OSCQuery and outgoing OSC overrides default to `null`, which lets Zeroconf discovery supply connection information. The receive listener defaults to `127.0.0.1` and `osc_receive_port: 0`; port `0` asks the OS for an available UDP port, which the app advertises to VRChat. Set a nonzero `osc_receive_port` to use a fixed port. The old default of `9001` is migrated to `0`.
 
-Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `supporter_key`, `control_url_template`, `log_level`, and `log_file`. The optional `exclude` setting is a list of OSC parameter paths to hide from the Avatar parameters browser. Use `*` to match any sequence of characters, for example `["/avatar/parameters/AFK", "/avatar/parameters/FT/*"]`. Exclusions only affect the browser list; they do not remove parameters from an existing shared-parameter set.
+Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `supporter_key`, `connection_retries`, `connection_retry_delay`, `control_url_template`, `log_level`, and `log_file`. The optional `exclude` setting is a list of OSC parameter paths to hide from the Avatar parameters browser. Use `*` to match any sequence of characters, for example `["/avatar/parameters/AFK", "/avatar/parameters/FT/*"]`. Exclusions only affect the browser list; they do not remove parameters from an existing shared-parameter set.
 
 Enter the optional `supporter_key` in the Control session area; it is saved to settings when you connect and included in the `register` message when nonempty. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
 
@@ -39,12 +39,14 @@ Avatar names and shared parameter definitions are saved per avatar to `%LOCALAPP
 
 ## Websocket Protocol
 
-The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_API_WS_URL`. Session creation sends the current avatar and the selected parameters, including their current values:
+The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_API_WS_URL`. Session creation sends the current avatar and the selected parameters, including their current values. On reconnect, the client also sends the disconnected session's `token` and its `resume_token` credential to reclaim that session:
 
 ```json
 {
   "type": "register",
   "version": 1,
+  "token": "<previous session token, when resuming>",
+  "resume_token": "<credential from the previous registered response, when resuming>",
   "supporter_key": "<optional supporter key>",
   "parameters": [
     {
@@ -64,6 +66,7 @@ The API generates the session token and returns a `registered` message containin
   "type": "registered",
   "version": 1,
   "token": "grFMwOxz",
+  "resume_token": "<resume credential>",
   "url": "http://osccontrol.app/t/grFMwOxz",
   "count": 16
 }
@@ -86,7 +89,7 @@ The desktop app provides optional min/max fields for float and int parameters an
 
 The app puts the API-provided URL in the control session link and uses the token for subsequent updates. If the response omits `url`, the app falls back to the configured `control_url_template`. The app expects remote changes in this format:
 
-If the websocket connection attempt receives HTTP 503 or closes with code 1013 and reason `instance draining`, the app retries the connection up to three times to allow the load balancer to route it to another API shard.
+If the initial websocket connection attempt receives HTTP 503 or closes with code 1013 and reason `instance draining`, the app retries up to three times to allow the load balancer to route it to another API shard. If an established websocket closes unexpectedly, the app reconnects and re-registers the session using exponential backoff from `connection_retry_delay` (default 1 second) up to 30 seconds. During the server's 90-second grace period, it includes the previous session `token` and `resume_token` to reclaim the same session. Reconnection continues until the user ends the session, and parameter changes made while disconnected are sent after reconnecting.
 
 After registration, and whenever the active avatar name changes, the app sends:
 

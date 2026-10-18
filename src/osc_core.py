@@ -346,7 +346,14 @@ def _serialize_parameter_definition(parameter):
     return definition
 
 
-def build_registration_payload(avatar_name, parameters, values, supporter_key=None):
+def build_registration_payload(
+    avatar_name,
+    parameters,
+    values,
+    supporter_key=None,
+    token=None,
+    resume_token=None,
+):
     payload = {
         "type": "register",
         "version": 1,
@@ -355,6 +362,15 @@ def build_registration_payload(avatar_name, parameters, values, supporter_key=No
     }
     if supporter_key:
         payload["supporter_key"] = supporter_key
+    if (token is None) != (resume_token is None):
+        raise ValueError("Token and resume token must be provided together")
+    if token is not None:
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("Token must be a non-empty string")
+        if not isinstance(resume_token, str) or not resume_token.strip():
+            raise ValueError("Resume token must be a non-empty string")
+        payload["token"] = token
+        payload["resume_token"] = resume_token
     return payload
 
 
@@ -436,6 +452,17 @@ def registration_token_from_acknowledgement(acknowledgement):
     if not isinstance(token, str) or not token.strip():
         raise RuntimeError("Service registration response did not include a valid token")
     return token
+
+
+def registration_resume_token_from_acknowledgement(acknowledgement):
+    if not isinstance(acknowledgement, dict) or acknowledgement.get("type") != "registered":
+        raise RuntimeError("Service did not acknowledge registration")
+    resume_token = acknowledgement.get("resume_token")
+    if not isinstance(resume_token, str) or not resume_token.strip():
+        raise RuntimeError(
+            "Service registration response did not include a valid resume token"
+        )
+    return resume_token
 
 
 def registration_url_from_acknowledgement(acknowledgement):
