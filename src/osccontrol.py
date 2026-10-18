@@ -371,18 +371,38 @@ class OscControlApp:
 
         registered = ttk.Labelframe(body, text="Shared parameters", padding=10)
         body.add(registered, weight=1)
+        registered_content = ttk.Frame(registered)
+        registered_content.pack(fill=BOTH, expand=True)
         self.registered_list = ttk.Treeview(
-            registered, columns=("name", "path", "type"), show="headings", height=6
+            registered_content,
+            columns=("name", "path", "type"),
+            show="headings",
+            height=6,
+            selectmode="browse",
         )
         for column, label in (("name", "Shared name"), ("path", "OSC path"), ("type", "Type")):
             self.registered_list.heading(column, text=label)
         self.registered_list.column("name", width=150)
         self.registered_list.column("path", width=390, minwidth=200)
         self.registered_list.column("type", width=80, anchor="center")
-        self.registered_list.pack(fill=BOTH, expand=True)
+        self.registered_list.pack(side=LEFT, fill=BOTH, expand=True)
+        reorder_buttons = ttk.Frame(registered_content)
+        reorder_buttons.pack(side=RIGHT, fill=Y, padx=(8, 0))
+        self.move_up_button = ttk.Button(
+            reorder_buttons, text="Move up", command=lambda: self.move_selected(-1)
+        )
+        self.move_up_button.pack(fill=X)
+        self.move_down_button = ttk.Button(
+            reorder_buttons, text="Move down", command=lambda: self.move_selected(1)
+        )
+        self.move_down_button.pack(fill=X, pady=(6, 0))
+        self.registered_list.bind(
+            "<<TreeviewSelect>>", self._update_parameter_move_buttons
+        )
         ttk.Button(registered, text="Remove selected", command=self.remove_selected).pack(
             anchor="e", pady=(8, 0)
         )
+        self._update_parameter_move_buttons()
 
         session = ttk.Labelframe(outer, text="Control session", padding=10)
         session.pack(fill=X, pady=(12, 0))
@@ -677,6 +697,55 @@ class OscControlApp:
                 iid=parameter.path,
                 values=(parameter.name, parameter.path, parameter.type),
             )
+        self._update_parameter_move_buttons()
+
+    def _update_parameter_move_buttons(self, _event=None):
+        selected = self.registered_list.selection()
+        paths = self.registered_list.get_children()
+        if len(selected) != 1:
+            self.move_up_button.configure(state="disabled")
+            self.move_down_button.configure(state="disabled")
+            return
+        index = paths.index(selected[0])
+        self.move_up_button.configure(
+            state="normal" if index > 0 else "disabled"
+        )
+        self.move_down_button.configure(
+            state="normal" if index < len(paths) - 1 else "disabled"
+        )
+
+    def move_selected(self, direction):
+        selected = self.registered_list.selection()
+        if len(selected) != 1 or direction not in (-1, 1):
+            return
+        paths = list(self.registered_list.get_children())
+        index = paths.index(selected[0])
+        new_index = index + direction
+        if not 0 <= new_index < len(paths):
+            return
+
+        paths[index], paths[new_index] = paths[new_index], paths[index]
+        self.registered_list.move(selected[0], "", new_index)
+        self.registered_list.selection_set(selected[0])
+        self.registered_list.focus(selected[0])
+        self.parameters = {path: self.parameters[path] for path in paths}
+        self._persist_current_shared_parameters()
+        if self.session_thread and self.session_thread.is_alive():
+            self.parameter_update_queue.put(
+                (
+                    "replace_parameters",
+                    self.active_avatar,
+                    list(self.parameters.values()),
+                    self.avatar_name_var.get().strip() or self.active_avatar,
+                )
+            )
+        logger.info(
+            "Moved shared parameter %r from position %s to %s",
+            selected[0],
+            index + 1,
+            new_index + 1,
+        )
+        self._update_parameter_move_buttons()
 
     def _on_osc_parameter(self, address, *args):
         parameter = self.parameters.get(address)
@@ -904,6 +973,7 @@ class OscControlApp:
             self._persist_current_shared_parameters()
             if self.websocket_ready.is_set():
                 self.parameter_update_queue.put(("remove_parameters", paths))
+        self._update_parameter_move_buttons()
 
     def register_session(self):
         settings.set("supporter_key", self.supporter_key_var.get().strip())
