@@ -39,7 +39,7 @@ jobs:
             --name vrc-osc-control-windows `
             --icon=./src/resource/icon.ico `
             --add-data="./src/resource/icon.ico;resource" `
-            src/osccontrol.py
+            src/main.py
 
       - name: Upload Windows Build
         uses: actions/upload-artifact@v6
@@ -70,7 +70,7 @@ jobs:
           pyinstaller --clean --noconfirm --onefile --windowed \
             --name vrc-osc-control-linux \
             --add-data="./src/resource/icon.ico:resource" \
-            src/osccontrol.py
+            src/main.py
 
       - name: Upload Linux Build
         uses: actions/upload-artifact@v6
@@ -101,7 +101,7 @@ jobs:
           pyinstaller --clean --noconfirm --onefile --windowed \
             --name vrc-osc-control-macos \
             --add-data="./src/resource/icon.ico:resource" \
-            src/osccontrol.py
+            src/main.py
 
       - name: Upload macOS Build
         uses: actions/upload-artifact@v6
