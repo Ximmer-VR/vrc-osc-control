@@ -360,8 +360,6 @@ def build_registration_payload(
         "avatar_name": avatar_name,
         "parameters": serialize_parameters(parameters, values),
     }
-    if supporter_key:
-        payload["supporter_key"] = supporter_key
     if (token is None) != (resume_token is None):
         raise ValueError("Token and resume token must be provided together")
     if token is not None:
@@ -371,6 +369,8 @@ def build_registration_payload(
             raise ValueError("Resume token must be a non-empty string")
         payload["token"] = token
         payload["resume_token"] = resume_token
+    elif supporter_key:
+        payload["supporter_key"] = supporter_key
     return payload
 
 
