@@ -167,12 +167,14 @@ def configure_logging():
         )
     except OSError as error:
         print(f"Could not create log file {log_path}: {error}")
+    logging.basicConfig(level=logging.INFO)
     logging.basicConfig(
-        level=level,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s",
         handlers=handlers,
         force=True,
     )
+    logger.setLevel(level)
     if len(handlers) > 1:
         logger.info("Logging initialized at %s", log_path)
     else:
@@ -608,16 +610,15 @@ class OscControlApp:
                         )
                         return
                     logger.info("Discovered OSCQuery service %s at %s", name, connection.url)
-                    app.root.after(0, lambda: app._apply_discovered_connection(connection))
+                    if name.lower().startswith("vrchat"):       #TODO: regex fit vrchat service name 'VRChat-Client-000000._oscjson._tcp.local.'
+                        app.root.after(0, lambda: app._apply_discovered_connection(connection))
 
                 def remove_service(self, _zeroconf, _service_type, name):
                     logger.info("OSCQuery service removed: %s", name)
 
             self.zeroconf = Zeroconf()
             self._register_osc_services()
-            self.service_browser = ServiceBrowser(
-                self.zeroconf, OSCQUERY_SERVICE_TYPE, OscQueryListener()
-            )
+            self.service_browser = ServiceBrowser(self.zeroconf, OSCQUERY_SERVICE_TYPE, OscQueryListener())
             logger.info("Searching for VRChat OSCQuery services (%s)", OSCQUERY_SERVICE_TYPE)
         except Exception:
             logger.exception("Could not start OSCQuery service discovery")
@@ -1550,7 +1551,6 @@ def main():
     logger.info("Starting VRChat OSC Control")
     set_windows_app_user_model_id()
     root = ttk.App("VRChat OSC Control", theme=settings.get("theme", "bootstrap-dark"))
-    print(root.theme_names())
     set_application_icon(root)
     OscControlApp(root)
     root.mainloop()
