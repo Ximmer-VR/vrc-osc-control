@@ -54,12 +54,14 @@ from osc_core import (
     flatten_oscquery_parameters,
     load_avatar_name,
     load_shared_parameters,
+    match_vrcfury_parameters,
     parse_parameter_changed,
     query_oscquery_value,
     registration_resume_token_from_acknowledgement,
     registration_token_from_acknowledgement,
     registration_url_from_acknowledgement,
     save_shared_parameters,
+    vrcfury_parameter_suffix,
 )
 
 import settings
@@ -921,7 +923,7 @@ class OscControlApp:
         logger.info("Added shared parameter name=%r path=%r type=%s", name, path, parameter_type)
         self._persist_current_shared_parameters()
         if self.websocket_ready.is_set():
-            self.parameter_update_queue.put(("add_parameters", [parameter]))
+            self.parameter_update_queue.put(("add_parameters", [parameter], self.active_avatar))
         self.path_var.set("")
         self.custom_name_var.set("")
 
@@ -1035,12 +1037,14 @@ class OscControlApp:
     def _read_registration_state(self, parameters, fallback_avatar_id):
         values = dict(self.parameter_values)
         avatar_id = None
+        available = []
         try:
             request = urllib.request.Request(
                 self.oscquery_url, headers={"Accept": "application/json"}
             )
             with urllib.request.urlopen(request, timeout=3) as response:
                 state = json.loads(response.read().decode("utf-8"))
+            available = flatten_oscquery_parameters(state)
             values.update(extract_oscquery_values(state))
             avatar_id = values.get("/avatar/change")
         except Exception:
@@ -1056,6 +1060,11 @@ class OscControlApp:
         if not isinstance(avatar_id, str) or not avatar_id or avatar_id == "Waiting for VRChat":
             raise RuntimeError("Could not determine the current avatar ID from OSCQuery or /avatar/change")
 
+        if available:
+            available_paths = {path for path, _ in available}
+            for parameter in parameters:
+                if vrcfury_parameter_suffix(parameter.path) and parameter.path not in available_paths:
+                    values.pop(parameter.path, None)
         for parameter in parameters:
             if parameter.path not in values:
                 try:
@@ -1070,19 +1079,101 @@ class OscControlApp:
             values[parameter.path] = coerce_control_value(
                 values[parameter.path], parameter.type
             )
+        self._remap_vrcfury_parameters(parameters, values, available, avatar_id)
         return avatar_id, values
 
-    def _read_parameter_values(self, parameters):
+    def _remap_vrcfury_parameters(self, parameters, values, available, avatar_id, discovered_values=None):
+        missing = [parameter for parameter in parameters if parameter.path not in values]
+        if not any(vrcfury_parameter_suffix(parameter.path) for parameter in missing):
+            return
+        if avatar_id and self.active_avatar != avatar_id:
+            logger.warning("Cannot match parameters for an inactive avatar")
+            return
+        selected = dict(self.parameters)
+        selected.update({parameter.path: parameter for parameter in parameters})
+        matches = match_vrcfury_parameters(selected.values(), available)
+        replacements = {}
+        for parameter in missing:
+            replacement = matches.get(parameter.path)
+            if replacement is None:
+                continue
+            value = values.get(replacement.path)
+            if value is None and discovered_values is not None:
+                value = discovered_values.get(replacement.path)
+            if value is None:
+                try:
+                    value = query_oscquery_value(self.oscquery_url, replacement.path)
+                except (OSError, ValueError, TypeError):
+                    logger.debug("Could not query matched parameter %s", replacement.path, exc_info=True)
+                    continue
+            if value is None:
+                continue
+            values[replacement.path] = coerce_control_value(value, replacement.type)
+            replacements[parameter.path] = replacement
+            logger.info("Matched VRCFury parameter %s to %s", parameter.path, replacement.path)
+        if not replacements:
+            return
+        originals = {parameter.path: parameter for parameter in parameters}
+        parameters[:] = [replacements.get(parameter.path, parameter) for parameter in parameters]
+
+        def update_ui():
+            if avatar_id and self.active_avatar != avatar_id:
+                return
+            updated = []
+            changed = False
+            for parameter in self.parameters.values():
+                replacement = replacements.get(parameter.path)
+                if (
+                    replacement is not None
+                    and parameter == originals[parameter.path]
+                    and replacement.path not in self.parameters
+                ):
+                    updated.append(replacement)
+                    changed = True
+                else:
+                    updated.append(parameter)
+            if changed:
+                self._replace_shared_parameters(updated)
+                self._persist_current_shared_parameters()
+                self.status_var.set("Updated saved VRCFury parameter paths.")
+
+        self.root.after(0, update_ui)
+
+    def _read_parameter_values(self, parameters, avatar_id=None, resolve_missing=True):
         values = {}
         for parameter in parameters:
             try:
                 value = query_oscquery_value(self.oscquery_url, parameter.path)
             except Exception:
                 logger.debug("Could not query current value for %s", parameter.path, exc_info=True)
-                value = self.parameter_values.get(parameter.path)
+                value = (
+                    None if resolve_missing and vrcfury_parameter_suffix(parameter.path)
+                    else self.parameter_values.get(parameter.path)
+                )
             if value is None:
                 continue
             values[parameter.path] = coerce_control_value(value, parameter.type)
+        if resolve_missing and any(
+            parameter.path not in values and vrcfury_parameter_suffix(parameter.path)
+            for parameter in parameters
+        ):
+            try:
+                request = urllib.request.Request(
+                    self.oscquery_url, headers={"Accept": "application/json"}
+                )
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    state = json.loads(response.read().decode("utf-8"))
+                discovered_values = extract_oscquery_values(state)
+                current_avatar = discovered_values.get("/avatar/change")
+                if avatar_id and current_avatar and avatar_id != current_avatar:
+                    logger.warning("Cannot match parameters: OSCQuery avatar changed")
+                else:
+                    self._remap_vrcfury_parameters(
+                        parameters, values, flatten_oscquery_parameters(state),
+                        avatar_id, discovered_values,
+                    )
+            except (OSError, ValueError, TypeError):
+                logger.warning("Could not discover VRCFury parameter replacements", exc_info=True)
         return values
 
     def _report_ignored_parameters(self, parameters, avatar_id=None):
@@ -1101,16 +1192,9 @@ class OscControlApp:
         def update_ui():
             if avatar_id and self.active_avatar != avatar_id:
                 return
-            removed = False
-            for parameter in parameters:
-                if self.parameters.get(parameter.path) == parameter:
-                    self.parameters.pop(parameter.path, None)
-                    self.registered_list.delete(parameter.path)
-                    removed = True
-            if removed:
-                self._update_oscquery_endpoints()
-                self._persist_current_shared_parameters()
-            self.status_var.set(f"Ignored unavailable avatar parameters: {parameter_details}")
+            self.status_var.set(
+                f"Ignored unavailable avatar parameters (kept in saved list): {parameter_details}"
+            )
 
         self.root.after(0, update_ui)
 
@@ -1152,6 +1236,8 @@ class OscControlApp:
                             await asyncio.to_thread(
                                 self._read_parameter_values,
                                 list(active_parameters.values()),
+                                None,
+                                False,
                             )
                         )
                     await self._run_websocket_connection(
@@ -1288,16 +1374,17 @@ class OscControlApp:
 
                         case "add_parameters":
                             add_parameters = event[1]
+                            avatar_id = event[2]
                             try:
                                 add_values = await asyncio.to_thread(
-                                    self._read_parameter_values, add_parameters
+                                    self._read_parameter_values, add_parameters, avatar_id
                                 )
                                 ignored_parameters = [
                                     parameter
                                     for parameter in add_parameters
                                     if parameter.path not in add_values
                                 ]
-                                self._report_ignored_parameters(ignored_parameters)
+                                self._report_ignored_parameters(ignored_parameters, avatar_id)
                                 add_parameters = [
                                     parameter
                                     for parameter in add_parameters
@@ -1357,7 +1444,7 @@ class OscControlApp:
                             if replacement_parameters:
                                 try:
                                     replacement_values = await asyncio.to_thread(
-                                        self._read_parameter_values, replacement_parameters
+                                        self._read_parameter_values, replacement_parameters, avatar_id
                                     )
                                     ignored_parameters = [
                                         parameter

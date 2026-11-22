@@ -6,8 +6,9 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
 from urllib.parse import quote
@@ -414,6 +415,39 @@ def coerce_control_value(value, parameter_type):
     if parameter_type == "string" and isinstance(value, str):
         return value
     raise ValueError(f"Expected a {parameter_type} value")
+
+
+_VF_PATH = re.compile(r"^/avatar/parameters/VF(?:[0-9]+_|_[0-9]+/|_[A-Za-z0-9]+_)(.+)$")
+
+
+def vrcfury_parameter_suffix(path):
+    match = _VF_PATH.fullmatch(path)
+    return match.group(1) if match else None
+
+
+def match_vrcfury_parameters(parameters, available):
+    """Find unambiguous replacements for missing VRCFury paths."""
+    parameters = list(parameters)
+    available = dict(available)
+    selected_paths = {parameter.path for parameter in parameters}
+    missing = {}
+    candidates = {}
+    for parameter in parameters:
+        suffix = vrcfury_parameter_suffix(parameter.path)
+        if suffix and parameter.path not in available:
+            missing.setdefault((suffix, parameter.type), []).append(parameter)
+    for path, parameter_type in available.items():
+        suffix = vrcfury_parameter_suffix(path)
+        if suffix and path not in selected_paths:
+            candidates.setdefault((suffix, parameter_type), []).append(path)
+    matches = {}
+    for key, originals in missing.items():
+        possible = candidates.get(key, [])
+        if len(originals) == 1 and len(possible) == 1:
+            matches[originals[0].path] = replace(originals[0], path=possible[0])
+        elif possible:
+            logger.warning("Ambiguous VRCFury parameter match for %s", key[0])
+    return matches
 
 
 def parse_parameter_changed(message, registered_parameters):

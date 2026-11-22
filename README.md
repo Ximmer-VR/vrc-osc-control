@@ -37,6 +37,8 @@ Enter the optional `supporter_key` in the Control session area; it is saved to s
 
 Avatar names and shared parameter definitions are saved per avatar to `%LOCALAPPDATA%\VRChatOSCControl\shared_parameters.json`. When the avatar ID changes, the app loads that avatar's saved name and parameter set. Override the location with `VRCHAT_OSC_SHARED_PARAMETERS_FILE`.
 
+When a saved VRCFury parameter is missing, the app can update its saved path to a unique, same-type OSCQuery match with the same path after the generated prefix. Numbered paths such as `VF147_Clothes/Jammies` and `VF_109/Clothes/Jammies`, as well as hashed paths such as `VF_f5vFx9ja_Clothes/Jammies`, are supported. Unavailable or ambiguous parameters are ignored for the session but kept in the saved list.
+
 ## Websocket Protocol
 
 The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_API_WS_URL`. Session creation sends the current avatar and the selected parameters, including their current values. On reconnect, the client also sends the disconnected session's `token` and its `resume_token` credential to reclaim that session:
