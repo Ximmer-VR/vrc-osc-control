@@ -612,7 +612,7 @@ class OscControlApp:
                         )
                         return
                     logger.info("Discovered OSCQuery service %s at %s", name, connection.url)
-                    if name.lower().startswith("vrchat"):       #TODO: regex fit vrchat service name 'VRChat-Client-000000._oscjson._tcp.local.'
+                    if name.lower().startswith("vrchat-client"):       #TODO: regex fit vrchat service name 'VRChat-Client-000000._oscjson._tcp.local.'
                         app.root.after(0, lambda: app._apply_discovered_connection(connection))
 
                 def remove_service(self, _zeroconf, _service_type, name):
