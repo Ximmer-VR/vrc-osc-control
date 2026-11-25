@@ -67,7 +67,7 @@ from osc_core import (
 
 import settings
 
-APP_VERSION = "0.1.8"
+APP_VERSION = "0.1.13"
 
 APP_DATA_DIRECTORY = Path(os.getenv("LOCALAPPDATA", Path.home())) / "VRChatOSCControl"
 SETTINGS_FILE = APP_DATA_DIRECTORY / "settings.json"
