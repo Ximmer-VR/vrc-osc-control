@@ -469,6 +469,10 @@ class UnsupportedProtocolVersion(RuntimeError):
     pass
 
 
+class InstanceDraining(RuntimeError):
+    pass
+
+
 def registration_token_from_acknowledgement(acknowledgement):
     if not isinstance(acknowledgement, dict):
         raise RuntimeError("Service registration acknowledgement was not a JSON object")
@@ -479,6 +483,11 @@ def registration_token_from_acknowledgement(acknowledgement):
                 "The API rejected this client's protocol version. This client likely needs an "
                 f"update. API response: {message}"
             )
+        if (
+            acknowledgement.get("code") == "instance_draining"
+            or "draining" in str(message).lower()
+        ):
+            raise InstanceDraining(message)
         raise RuntimeError(message)
     if acknowledgement.get("type") != "registered":
         raise RuntimeError("Service did not acknowledge registration")

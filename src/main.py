@@ -39,6 +39,7 @@ from osc_core import (
     SUPPORTED_TYPES,
     Parameter,
     UnsupportedProtocolVersion,
+    InstanceDraining,
     build_add_parameters,
     build_clear_parameters,
     build_oscquery_host_info,
@@ -1240,7 +1241,7 @@ class OscControlApp:
                                 False,
                             )
                         )
-                    await self._run_websocket_connection(
+                    reconnect_requested = await self._run_websocket_connection(
                         active_parameters,
                         active_values,
                         connection_values,
@@ -1249,7 +1250,9 @@ class OscControlApp:
                         osc_client,
                         resume_credentials,
                     )
-                    break
+                    if not reconnect_requested:
+                        break
+                    retry_cause = "server requested reconnect"
                 except websockets.exceptions.InvalidStatus as error:
                     if error.response.status_code != 503 or (
                         not session_established and self.session_token is None
@@ -1263,6 +1266,8 @@ class OscControlApp:
                     if not session_established and self.session_token is None:
                         raise
                     retry_cause = str(error) or type(error).__name__
+                except InstanceDraining as error:
+                    retry_cause = str(error)
 
                 if self.session_stop.is_set():
                     break
@@ -1358,7 +1363,8 @@ class OscControlApp:
                         message = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                     except asyncio.TimeoutError:
                         continue
-                    self._handle_websocket_command(message, active_parameters, osc_client)
+                    if self._handle_websocket_command(message, active_parameters, osc_client):
+                        return True
                 else:
                     event_type = event[0]
 
@@ -1560,6 +1566,10 @@ class OscControlApp:
             command_type = message.get("type")
 
             match command_type:
+                case "reconnect":
+                    logger.info("Server requested reconnect: reason=%r", message.get("reason"))
+                    return True
+
                 case "avatar_name_updated":
                     logger.debug("Received avatar name update from API. name=%r" % message.get("name"))
                     return
