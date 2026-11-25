@@ -35,6 +35,8 @@ jobs:
       - name: Build Executable
         shell: pwsh
         run: |
+          python scripts/set_build_version.py src/main.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pyinstaller --clean --noconfirm --onefile --windowed `
             --name vrc-osc-control-windows `
             --icon=./src/resource/icon.ico `
@@ -67,6 +69,7 @@ jobs:
 
       - name: Build Executable
         run: |
+          python scripts/set_build_version.py src/main.py
           pyinstaller --clean --noconfirm --onefile --windowed \
             --name vrc-osc-control-linux \
             --add-data="./src/resource/icon.ico:resource" \
@@ -98,6 +101,7 @@ jobs:
 
       - name: Build Executable
         run: |
+          python scripts/set_build_version.py src/main.py
           pyinstaller --clean --noconfirm --onefile --windowed \
             --name vrc-osc-control-macos \
             --add-data="./src/resource/icon.ico:resource" \

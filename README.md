@@ -175,6 +175,11 @@ python -m pip install pyinstaller
 
 The script builds a one-file, windowed executable under `dist` and bundles `resource/icon.ico`.
 
+GitHub Actions builds set the window version from the selected tag (for example,
+`v0.1.13` becomes `0.1.13`). Manually dispatched branch builds show
+`development-` followed by the short commit SHA. Runs from source show
+`development`.
+
 ## License
 
 This project is source-available under the proprietary terms in [LICENSE](LICENSE). Source viewing, personal noncommercial use, and private modifications are permitted; redistribution and commercial use are not. Third-party dependencies remain under their respective licenses.
