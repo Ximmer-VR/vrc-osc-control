@@ -219,8 +219,8 @@ class OscControlApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"VRChat OSC Control {APP_VERSION}")
-        self.root.geometry("780x950")
-        self.root.minsize(780, 950)
+        self.root.geometry("960x950")
+        self.root.minsize(960, 950)
 
         self.parameters = {}
         self.parameter_values = {}
