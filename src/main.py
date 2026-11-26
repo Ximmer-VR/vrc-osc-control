@@ -227,6 +227,18 @@ class OscControlApp:
         self.parameter_update_queue = queue.Queue()
         self.websocket_ready = threading.Event()
         self.available_parameters = []
+        categories = settings.get("parameter_categories", [])
+        if not isinstance(categories, list):
+            logger.warning("Ignoring invalid 'parameter_categories' setting; expected a list")
+            categories = []
+        self.parameter_categories = []
+        for category in categories:
+            if not isinstance(category, str):
+                logger.warning("Ignoring non-string entry in 'parameter_categories' setting")
+                continue
+            category = category.strip()
+            if category and category not in self.parameter_categories:
+                self.parameter_categories.append(category)
         excluded_paths = settings.get("exclude", DEFAULT_EXCLUDED_PATHS)
         if not isinstance(excluded_paths, list):
             logger.warning("Ignoring invalid 'exclude' setting; expected a list of OSC paths")
@@ -262,6 +274,7 @@ class OscControlApp:
         self.status_var = StringVar(value="Starting VRChat OSC listener...")
         self.path_var = StringVar()
         self.custom_name_var = StringVar()
+        self.category_var = StringVar()
         self.type_var = StringVar(value="float")
         self.minimum_var = StringVar()
         self.maximum_var = StringVar()
@@ -350,6 +363,11 @@ class OscControlApp:
         ttk.Entry(add_row, textvariable=self.custom_name_var, width=22).pack(
             side=LEFT, padx=(6, 12)
         )
+        ttk.Label(add_row, text="Category").pack(side=LEFT)
+        self.category_combo = ttk.Combobox(
+            add_row, textvariable=self.category_var, values=["", *self.parameter_categories], width=22
+        )
+        self.category_combo.pack(side=LEFT, fill=X, expand=True, padx=(6, 0))
 
         manual = ttk.Frame(browser)
         manual.pack(fill=X, pady=(8, 0))
@@ -380,16 +398,22 @@ class OscControlApp:
         registered_content.pack(fill=BOTH, expand=True)
         self.registered_list = ttk.Treeview(
             registered_content,
-            columns=("name", "path", "type"),
+            columns=("name", "path", "type", "category"),
             show="headings",
             height=6,
             selectmode="browse",
         )
-        for column, label in (("name", "Shared name"), ("path", "OSC path"), ("type", "Type")):
+        for column, label in (
+            ("name", "Shared name"),
+            ("path", "OSC path"),
+            ("type", "Type"),
+            ("category", "Category"),
+        ):
             self.registered_list.heading(column, text=label)
         self.registered_list.column("name", width=150)
         self.registered_list.column("path", width=390, minwidth=200)
         self.registered_list.column("type", width=80, anchor="center")
+        self.registered_list.column("category", width=120)
         self.registered_list.pack(side=LEFT, fill=BOTH, expand=True)
         reorder_buttons = ttk.Frame(registered_content)
         reorder_buttons.pack(side=RIGHT, fill=Y, padx=(8, 0))
@@ -699,7 +723,7 @@ class OscControlApp:
                 "",
                 END,
                 iid=parameter.path,
-                values=(parameter.name, parameter.path, parameter.type),
+                values=(parameter.name, parameter.path, parameter.type, parameter.category or ""),
             )
         self._update_parameter_move_buttons()
 
@@ -917,10 +941,22 @@ class OscControlApp:
         if any(parameter.name.casefold() == name.casefold() for parameter in self.parameters.values()):
             messagebox.showerror("Name already used", "Each shared name must be unique.")
             return
-        parameter = Parameter(path=path, name=name, type=parameter_type, **options)
+        category = self.category_var.get().strip()
+        parameter = Parameter(
+            path=path, name=name, type=parameter_type, category=category or None, **options
+        )
         self.parameters[path] = parameter
         self._update_oscquery_endpoints()
-        self.registered_list.insert("", END, iid=path, values=(name, path, parameter_type))
+        self.registered_list.insert("", END, iid=path, values=(name, path, parameter_type, category))
+        if category and category not in self.parameter_categories:
+            self.parameter_categories.append(category)
+            self.category_combo.configure(values=["", *self.parameter_categories])
+            settings.set("parameter_categories", self.parameter_categories)
+            if not settings.save():
+                messagebox.showwarning(
+                    "Could not save categories",
+                    "The category is available for this session, but could not be saved to settings.",
+                )
         logger.info("Added shared parameter name=%r path=%r type=%s", name, path, parameter_type)
         self._persist_current_shared_parameters()
         if self.websocket_ready.is_set():

@@ -29,6 +29,10 @@ The app discovers VRChat's `_oscjson._tcp.local.` OSCQuery service with Zeroconf
 
 Avatar parameter definitions and initial values are read from OSCQuery. The app also listens for `/avatar/change` and OSC updates for selected shared parameters. It queries OSCQuery for the current avatar ID and falls back to the most recent `/avatar/change` event when necessary. Parameters can be added manually if discovery is unavailable. In the Shared parameters list, select an entry and use Move up or Move down to reorder it; the order is saved per avatar and synchronized to an active session.
 
+When adding a shared parameter, optionally select or type a category. Newly entered
+categories are saved in settings for reuse across avatars and app restarts. Leave
+the category blank for an uncategorized parameter.
+
 On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json` with defaults. Edit that file to configure connection and logging settings. OSCQuery and outgoing OSC overrides default to `null`, which lets Zeroconf discovery supply connection information. The receive listener defaults to `127.0.0.1` and `osc_receive_port: 0`; port `0` asks the OS for an available UDP port, which the app advertises to VRChat. Set a nonzero `osc_receive_port` to use a fixed port. The old default of `9001` is migrated to `0`.
 
 Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `supporter_key`, `connection_retries`, `connection_retry_delay`, `control_url_template`, `log_level`, and `log_file`. The optional `exclude` setting is a list of OSC parameter paths to hide from the Avatar parameters browser. Use `*` to match any sequence of characters, for example `["/avatar/parameters/AFK", "/avatar/parameters/FT/*"]`. Exclusions only affect the browser list; they do not remove parameters from an existing shared-parameter set.
@@ -87,7 +91,7 @@ Float and int parameter definitions may include `min` and `max` bounds. When omi
 }
 ```
 
-The desktop app provides optional min/max fields for float and int parameters and a slider checkbox for ints. Empty bounds are omitted from registration so the API defaults apply.
+The desktop app provides optional min/max fields for float and int parameters and a slider checkbox for ints. Empty bounds are omitted from registration so the API defaults apply. A nonblank category is sent as the parameter's `category` string in both registration and `add_parameters` messages; blank categories are omitted.
 
 The app puts the API-provided URL in the control session link and uses the token for subsequent updates. If the response omits `url`, the app falls back to the configured `control_url_template`. The app expects remote changes in this format:
 

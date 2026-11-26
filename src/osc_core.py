@@ -30,6 +30,7 @@ class Parameter:
     min: int | float | None = None
     max: int | float | None = None
     slider: bool = False
+    category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,12 @@ def load_shared_parameters(file_path, avatar_id):
         except ValueError:
             continue
         slider = entry.get("slider", False)
+        category = entry.get("category")
+        if category is not None and not isinstance(category, str):
+            logger.warning("Ignoring invalid category for saved parameter %s", path)
+            category = None
+        if isinstance(category, str):
+            category = category.strip() or None
         if (
             (minimum is not None and maximum is not None and minimum >= maximum)
             or not isinstance(slider, bool)
@@ -138,6 +145,7 @@ def load_shared_parameters(file_path, avatar_id):
             min=minimum,
             max=maximum,
             slider=slider,
+            category=category,
         )
         parameters.append(parameter)
         paths.add(path)
@@ -344,6 +352,8 @@ def _serialize_parameter_definition(parameter):
         definition["max"] = parameter.max
     if parameter.type == "int" and parameter.slider:
         definition["slider"] = True
+    if parameter.category and parameter.category.strip():
+        definition["category"] = parameter.category.strip()
     return definition
 
 

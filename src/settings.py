@@ -5,6 +5,9 @@
 import os
 from pathlib import Path
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 settings = {}
 settings_filename = None
@@ -33,8 +36,10 @@ def save():
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         with open(settings_file, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=4)
+        return True
     except OSError:
-        pass
+        logger.exception("Could not save settings to %s", settings_file)
+        return False
 
 def set(key, value):
     global settings
