@@ -29,6 +29,10 @@ The app discovers VRChat's `_oscjson._tcp.local.` OSCQuery service with Zeroconf
 
 Avatar parameter definitions and initial values are read from OSCQuery. The app also listens for `/avatar/change` and OSC updates for selected shared parameters. It queries OSCQuery for the current avatar ID and falls back to the most recent `/avatar/change` event when necessary. Parameters can be added manually if discovery is unavailable. In the Shared parameters list, select an entry and use Move up or Move down to reorder it; the order is saved per avatar and synchronized to an active session.
 
+Select a shared parameter to edit its path, name, type, category, and options in
+the Avatar parameters section. Choose Update to save and synchronize the changes,
+or Cancel edit to return to adding parameters.
+
 When adding a shared parameter, optionally select or type a category. Newly entered
 categories are saved in settings for reuse across avatars and app restarts. Leave
 the category blank for an uncategorized parameter.

@@ -218,7 +218,7 @@ def set_windows_app_user_model_id():
 class OscControlApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"VRChat OSC Control v{APP_VERSION}")
+        self.root.title(f"VRChat OSC Control {APP_VERSION}")
         self.root.geometry("780x950")
         self.root.minsize(780, 950)
 
@@ -227,6 +227,7 @@ class OscControlApp:
         self.parameter_update_queue = queue.Queue()
         self.websocket_ready = threading.Event()
         self.available_parameters = []
+        self.editing_parameter_path = None
         categories = settings.get("parameter_categories", [])
         if not isinstance(categories, list):
             logger.warning("Ignoring invalid 'parameter_categories' setting; expected a list")
@@ -378,7 +379,8 @@ class OscControlApp:
         ttk.Combobox(
             manual, textvariable=self.type_var, values=SUPPORTED_TYPES, state="readonly", width=8
         ).pack(side=LEFT, padx=(0, 8))
-        ttk.Button(manual, text="Add", command=self.add_manual).pack(side=LEFT)
+        self.add_parameter_button = ttk.Button(manual, text="Add", command=self.add_manual)
+        self.add_parameter_button.pack(side=LEFT)
 
         options_row = ttk.Frame(browser)
         options_row.pack(fill=X, pady=(8, 0))
@@ -425,9 +427,7 @@ class OscControlApp:
             reorder_buttons, text="Move down", command=lambda: self.move_selected(1)
         )
         self.move_down_button.pack(fill=X, pady=(6, 0))
-        self.registered_list.bind(
-            "<<TreeviewSelect>>", self._update_parameter_move_buttons
-        )
+        self.registered_list.bind("<<TreeviewSelect>>", self._select_shared_parameter)
         ttk.Button(registered, text="Remove selected", command=self.remove_selected).pack(
             anchor="e", pady=(8, 0)
         )
@@ -715,6 +715,8 @@ class OscControlApp:
         self.root.after(settings.get("avatar_change_refresh_delay", DEFAULT_AVATAR_CHANGE_REFRESH_DELAY_MS), self.refresh_parameters)
 
     def _replace_shared_parameters(self, parameters):
+        if self.editing_parameter_path is not None:
+            self._cancel_parameter_edit()
         self.parameters = {parameter.path: parameter for parameter in parameters}
         self._update_oscquery_endpoints()
         self.registered_list.delete(*self.registered_list.get_children())
@@ -865,11 +867,50 @@ class OscControlApp:
         selection = self.available_list.selection()
         if not selection:
             return
+        if self.editing_parameter_path is not None:
+            self._cancel_parameter_edit()
         path = selection[0]
         _, parameter_type = self.available_list.item(path, "values")
         self.path_var.set(path)
         self.type_var.set(parameter_type)
         self.custom_name_var.set(path.rsplit("/", 1)[-1])
+
+    def _select_shared_parameter(self, _event=None):
+        self._update_parameter_move_buttons()
+        selection = self.registered_list.selection()
+        if not selection:
+            if self.editing_parameter_path is not None:
+                self._cancel_parameter_edit()
+            return
+        path = selection[0]
+        if path == self.editing_parameter_path:
+            return
+        parameter = self.parameters.get(path)
+        if parameter is None:
+            return
+        self.available_list.selection_remove(*self.available_list.selection())
+        self.editing_parameter_path = path
+        self.path_var.set(parameter.path)
+        self.custom_name_var.set(parameter.name)
+        self.type_var.set(parameter.type)
+        self.category_var.set(parameter.category or "")
+        self.minimum_var.set("" if parameter.min is None else str(parameter.min))
+        self.maximum_var.set("" if parameter.max is None else str(parameter.max))
+        self.slider_var.set(parameter.slider)
+        self.add_parameter_button.configure(text="Update")
+
+    def _cancel_parameter_edit(self):
+        self.editing_parameter_path = None
+        self.registered_list.selection_remove(*self.registered_list.selection())
+        self.add_parameter_button.configure(text="Add")
+        self.path_var.set("")
+        self.custom_name_var.set("")
+        self.category_var.set("")
+        self.type_var.set("float")
+        self.minimum_var.set("")
+        self.maximum_var.set("")
+        self.slider_var.set(False)
+        self._update_parameter_move_buttons()
 
     def add_manual(self):
         self._add_parameter(self.path_var.get(), self.custom_name_var.get(), self.type_var.get())
@@ -892,6 +933,8 @@ class OscControlApp:
             self.slider_checkbutton.pack(side=LEFT)
 
     def _read_parameter_options(self, parameter_type):
+        if parameter_type not in ("int", "float"):
+            return {"min": None, "max": None, "slider": False}
         minimum_text = self.minimum_var.get().strip()
         maximum_text = self.maximum_var.get().strip()
         if parameter_type == "int":
@@ -935,19 +978,47 @@ class OscControlApp:
         except ValueError as error:
             messagebox.showerror("Invalid range", str(error))
             return
-        if any(parameter.path == path for parameter in self.parameters.values()):
+        editing_path = self.editing_parameter_path
+        if editing_path is not None and editing_path not in self.parameters:
+            messagebox.showerror("Parameter unavailable", "The selected parameter no longer exists.")
+            self._cancel_parameter_edit()
+            return
+        if path in self.parameters and path != editing_path:
             messagebox.showerror("Already added", "That OSC parameter is already registered.")
             return
-        if any(parameter.name.casefold() == name.casefold() for parameter in self.parameters.values()):
+        if any(
+            item.path != editing_path and item.name.casefold() == name.casefold()
+            for item in self.parameters.values()
+        ):
             messagebox.showerror("Name already used", "Each shared name must be unique.")
             return
         category = self.category_var.get().strip()
         parameter = Parameter(
             path=path, name=name, type=parameter_type, category=category or None, **options
         )
-        self.parameters[path] = parameter
+        if editing_path is None:
+            self.parameters[path] = parameter
+            self.registered_list.insert(
+                "", END, iid=path, values=(name, path, parameter_type, category)
+            )
+        else:
+            original = self.parameters[editing_path]
+            self.parameters = {
+                parameter.path if key == editing_path else key:
+                parameter if key == editing_path else item
+                for key, item in self.parameters.items()
+            }
+            if editing_path == path:
+                self.registered_list.item(path, values=(name, path, parameter_type, category))
+            else:
+                index = self.registered_list.index(editing_path)
+                self.registered_list.delete(editing_path)
+                self.registered_list.insert(
+                    "", index, iid=path, values=(name, path, parameter_type, category)
+                )
+            if editing_path == path and original.type != parameter_type:
+                self.parameter_values.pop(path, None)
         self._update_oscquery_endpoints()
-        self.registered_list.insert("", END, iid=path, values=(name, path, parameter_type, category))
         if category and category not in self.parameter_categories:
             self.parameter_categories.append(category)
             self.category_combo.configure(values=["", *self.parameter_categories])
@@ -957,12 +1028,27 @@ class OscControlApp:
                     "Could not save categories",
                     "The category is available for this session, but could not be saved to settings.",
                 )
-        logger.info("Added shared parameter name=%r path=%r type=%s", name, path, parameter_type)
+        logger.info(
+            "%s shared parameter name=%r path=%r type=%s",
+            "Added" if editing_path is None else "Updated", name, path, parameter_type,
+        )
         self._persist_current_shared_parameters()
-        if self.websocket_ready.is_set():
+        if editing_path is not None:
+            if self.session_thread and self.session_thread.is_alive():
+                self.parameter_update_queue.put(
+                    (
+                        "replace_parameters",
+                        self.active_avatar,
+                        list(self.parameters.values()),
+                        self.avatar_name_var.get().strip() or self.active_avatar,
+                    )
+                )
+            self._cancel_parameter_edit()
+        elif self.websocket_ready.is_set():
             self.parameter_update_queue.put(("add_parameters", [parameter], self.active_avatar))
-        self.path_var.set("")
-        self.custom_name_var.set("")
+        if editing_path is None:
+            self.path_var.set("")
+            self.custom_name_var.set("")
 
     def _persist_current_shared_parameters(self):
         if not self.active_avatar or self.active_avatar == "Waiting for VRChat":
@@ -1004,6 +1090,8 @@ class OscControlApp:
 
     def remove_selected(self):
         paths = list(self.registered_list.selection())
+        if self.editing_parameter_path in paths:
+            self._cancel_parameter_edit()
         for path in paths:
             self.parameters.pop(path, None)
             self.registered_list.delete(path)
