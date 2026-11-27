@@ -41,7 +41,7 @@ On first launch, the app creates `%LOCALAPPDATA%\VRChatOSCControl\settings.json`
 
 Settings include `oscquery_url`, `osc_send_host`, `osc_send_port`, `osc_receive_host`, `osc_receive_port`, `api_websocket_url`, `supporter_key`, `connection_retries`, `connection_retry_delay`, `control_url_template`, `log_level`, and `log_file`. The optional `exclude` setting is a list of OSC parameter paths to hide from the Avatar parameters browser. Use `*` to match any sequence of characters, for example `["/avatar/parameters/AFK", "/avatar/parameters/FT/*"]`. Exclusions only affect the browser list; they do not remove parameters from an existing shared-parameter set.
 
-Enter the optional `supporter_key` in the Control session area; it is saved to settings when you connect and included in the `register` message when nonempty. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
+Enter the optional `supporter_key` in the Control session area; it is saved to settings when you connect and included in the `register` message when nonempty. An optional password can be entered with the key; it is sent only with a nonempty supporter key and is not saved to settings. Leave `oscquery_url`, `osc_send_host`, and `osc_send_port` as `null` to use discovered values and localhost fallbacks. The default websocket and share-link URLs point to `osccontrol.app`.
 
 Avatar names and shared parameter definitions are saved per avatar to `%LOCALAPPDATA%\VRChatOSCControl\shared_parameters.json`. When the avatar ID changes, the app loads that avatar's saved name and parameter set. Override the location with `VRCHAT_OSC_SHARED_PARAMETERS_FILE`.
 
@@ -58,6 +58,7 @@ The default websocket URL is `wss://osccontrol.app/ws`; override it with `OSC_AP
   "token": "<previous session token, when resuming>",
   "resume_token": "<credential from the previous registered response, when resuming>",
   "supporter_key": "<optional supporter key>",
+  "password": "<optional supporter password, when using a supporter key>",
   "parameters": [
     {
       "path": "/avatar/parameters/Wave",

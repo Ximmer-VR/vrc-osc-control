@@ -282,6 +282,7 @@ class OscControlApp:
         self.slider_var = BooleanVar(value=False)
         self.share_link_var = StringVar()
         self.supporter_key_var = StringVar(value=settings.get("supporter_key"))
+        self.supporter_password_var = StringVar()
         self.parameter_filter_var = StringVar()
         self.parameter_count_var = StringVar(value="0 parameters")
 
@@ -441,6 +442,15 @@ class OscControlApp:
         ttk.Entry(supporter_key_row, textvariable=self.supporter_key_var, show="*", width=32).pack(
             side=LEFT, fill=X, expand=True
         )
+        supporter_password_row = ttk.Frame(session)
+        supporter_password_row.pack(fill=X, pady=(0, 8))
+        ttk.Label(supporter_password_row, text="Password", width=15).pack(side=LEFT)
+        ttk.Entry(
+            supporter_password_row,
+            textvariable=self.supporter_password_var,
+            show="*",
+            width=32,
+        ).pack(side=LEFT, fill=X, expand=True)
         self.register_button = ttk.Button(
             session, text="Connect and create share link", command=self.register_session
         )
@@ -1152,12 +1162,16 @@ class OscControlApp:
         self.open_button.configure(state="disabled")
         self.status_var.set("Connecting to osccontrol.app and registering parameters...")
         self.session_thread = threading.Thread(
-            target=self._run_session, args=(parameters, avatar_id), daemon=True
+            target=self._run_session,
+            args=(parameters, avatar_id, self.supporter_password_var.get()),
+            daemon=True,
         )
         self.session_thread.start()
 
-    def _run_session(self, parameters, avatar_id):
-        asyncio.run(self._websocket_session(parameters, avatar_id))
+    def _run_session(self, parameters, avatar_id, supporter_password=None):
+        asyncio.run(
+            self._websocket_session(parameters, avatar_id, supporter_password)
+        )
 
     def _read_registration_state(self, parameters, fallback_avatar_id):
         values = dict(self.parameter_values)
@@ -1329,7 +1343,9 @@ class OscControlApp:
             if current_value is not None and current_value != initial_values[parameter.path]:
                 self.parameter_update_queue.put(("update_parameter", parameter.path, current_value))
 
-    async def _websocket_session(self, parameters, fallback_avatar_id):
+    async def _websocket_session(
+        self, parameters, fallback_avatar_id, supporter_password=None
+    ):
         logger.debug("Creating osc client on %s:%s", self.osc_send_host, self.osc_send_port)
         osc_client = SimpleUDPClient(self.osc_send_host, self.osc_send_port)
         try:
@@ -1373,6 +1389,7 @@ class OscControlApp:
                         ignored_parameters,
                         osc_client,
                         resume_credentials,
+                        supporter_password,
                     )
                     if not reconnect_requested:
                         break
@@ -1438,6 +1455,7 @@ class OscControlApp:
         ignored_parameters,
         osc_client,
         resume_credentials,
+        supporter_password=None,
     ):
         logger.info("Connecting to control websocket")
         websocket_connection = await _connect_control_websocket(
@@ -1449,6 +1467,7 @@ class OscControlApp:
                 list(active_parameters.values()),
                 values,
                 supporter_key=settings.get("supporter_key"),
+                password=supporter_password,
                 token=resume_credentials["token"],
                 resume_token=resume_credentials["resume_token"],
             )

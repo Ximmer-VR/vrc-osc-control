@@ -364,6 +364,7 @@ def build_registration_payload(
     supporter_key=None,
     token=None,
     resume_token=None,
+    password=None,
 ):
     payload = {
         "type": "register",
@@ -382,6 +383,8 @@ def build_registration_payload(
         payload["resume_token"] = resume_token
     elif supporter_key:
         payload["supporter_key"] = supporter_key
+        if password:
+            payload["password"] = password
     return payload
 
 
