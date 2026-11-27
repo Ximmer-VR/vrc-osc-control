@@ -883,7 +883,17 @@ class OscControlApp:
         _, parameter_type = self.available_list.item(path, "values")
         self.path_var.set(path)
         self.type_var.set(parameter_type)
-        self.custom_name_var.set(path.rsplit("/", 1)[-1])
+        name_parts = (
+            part
+            for part in path.removeprefix("/avatar/parameters/").split("/")
+            if part and not part.startswith("VF_")
+        )
+        self.custom_name_var.set(
+            " ".join(
+                part.replace("_", " ").strip().title()
+                for part in name_parts
+            )
+        )
 
     def _select_shared_parameter(self, _event=None):
         self._update_parameter_move_buttons()
